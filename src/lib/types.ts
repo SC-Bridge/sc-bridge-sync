@@ -115,4 +115,6 @@ export type ExtensionMessage =
   | { type: "SYNC_COMPLETE"; timestamp: string }
   | { type: "SYNC_ERROR"; error: string }
   | { type: "GET_LAST_PAYLOAD" }
-  | { type: "LAST_PAYLOAD"; payload: SyncPayload | null };
+  | { type: "LAST_PAYLOAD"; payload: SyncPayload | null }
+  | { type: "FETCH_ALL_PLEDGE_VALUES" }
+  | { type: "ALL_PLEDGE_VALUES"; totalSpend: number; pledgeCount: number };

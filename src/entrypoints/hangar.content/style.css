@@ -1,0 +1,180 @@
+/* ── SC Bridge Hangar Enhancement ──
+ * Matches RSI's dark theme while being clearly identifiable
+ * as SC Bridge additions.
+ */
+
+#scb-toolbar {
+  background: linear-gradient(180deg, #0d1b2a 0%, #1b2838 100%);
+  border: 1px solid #2a4a6b;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-family: "Electrolize", "Orbitron", -apple-system, sans-serif;
+}
+
+/* ── Toolbar Rows ── */
+
+.scb-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.scb-toolbar-row + .scb-toolbar-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #1e3a5f;
+}
+
+/* ── Filter Buttons ── */
+
+.scb-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scb-filter-btn {
+  padding: 5px 12px;
+  background: #16293d;
+  border: 1px solid #2a4a6b;
+  border-radius: 3px;
+  color: #8cb4d8;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.scb-filter-btn:hover {
+  background: #1e3a5f;
+  color: #b0d4f1;
+  border-color: #3a6a9b;
+}
+
+.scb-filter-btn.active {
+  background: #00b4d8;
+  border-color: #00b4d8;
+  color: #0d1b2a;
+}
+
+/* ── Search ── */
+
+.scb-search-wrap {
+  flex: 1;
+  min-width: 180px;
+}
+
+.scb-search {
+  width: 100%;
+  padding: 6px 12px;
+  background: #0d1b2a;
+  border: 1px solid #2a4a6b;
+  border-radius: 3px;
+  color: #c0d8ef;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.scb-search::placeholder {
+  color: #4a6a8a;
+}
+
+.scb-search:focus {
+  border-color: #00b4d8;
+}
+
+/* ── Stats Row ── */
+
+.scb-stats-row {
+  justify-content: space-between;
+}
+
+.scb-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scb-total-label {
+  color: #6a8aaa;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.scb-total-value {
+  color: #00e5ff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.scb-pledge-count {
+  color: #4a6a8a;
+  font-size: 12px;
+}
+
+/* ── Action Buttons ── */
+
+.scb-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.scb-action-btn {
+  padding: 5px 14px;
+  background: #16293d;
+  border: 1px solid #2a4a6b;
+  border-radius: 3px;
+  color: #8cb4d8;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.scb-action-btn:hover {
+  background: #1e3a5f;
+  color: #b0d4f1;
+  border-color: #3a6a9b;
+}
+
+.scb-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scb-sync-btn {
+  background: linear-gradient(135deg, #0077b6 0%, #00b4d8 100%);
+  border-color: #00b4d8;
+  color: #ffffff;
+  padding: 5px 18px;
+}
+
+.scb-sync-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0096c7 0%, #48cae4 100%);
+  border-color: #48cae4;
+  color: #ffffff;
+}
+
+/* ── Hidden pledge cards (via filter) ── */
+
+[data-scb-index][style*="display: none"] {
+  /* Ensure filtered items don't take space */
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}

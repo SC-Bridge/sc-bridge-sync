@@ -5,8 +5,9 @@
  * browser.storage.local so sync can resume after termination.
  */
 
-import { isRsiLoggedIn } from "@/lib/rsi-client";
+import { isRsiLoggedIn, rsiPost, rsiDelay } from "@/lib/rsi-client";
 import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
+import { RSI_API } from "@/lib/constants";
 import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 
 const LAST_PAYLOAD_KEY = "last_sync_payload";
@@ -36,6 +37,11 @@ export default defineBackground(() => {
 
       if (message.type === "GET_LAST_PAYLOAD") {
         getLastPayload().then(sendResponse);
+        return true;
+      }
+
+      if (message.type === "FETCH_ALL_PLEDGE_VALUES") {
+        fetchAllPledgeValues().then(sendResponse);
         return true;
       }
     },
@@ -127,6 +133,61 @@ export default defineBackground(() => {
       type: "SYNC_COMPLETE",
       timestamp,
     });
+  }
+
+  /**
+   * Fetch all pledge pages from RSI and calculate total spend.
+   * Used by the content script to display total across all pages.
+   */
+  async function fetchAllPledgeValues() {
+    try {
+      const rsiOk = await isRsiLoggedIn();
+      if (!rsiOk) {
+        return { totalSpend: 0, pledgeCount: 0, error: "Not logged in" };
+      }
+
+      let page = 1;
+      let totalSpend = 0;
+      let pledgeCount = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await rsiPost<{
+          data?: { pledges?: Array<{ value?: string; amount?: number }> };
+          success?: number;
+        }>(RSI_API.pledges, { page, pagesize: 100 });
+
+        const pledges = response?.data?.pledges ?? [];
+        if (pledges.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const pledge of pledges) {
+          pledgeCount++;
+          // Value is typically "$X.XX" or a numeric string
+          const valStr = pledge.value ?? "";
+          const match = valStr.toString().replace(/[$,]/g, "");
+          const num = parseFloat(match);
+          if (!isNaN(num)) {
+            totalSpend += num;
+          }
+        }
+
+        // RSI pages are 1-indexed; stop if we got fewer than requested
+        if (pledges.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+          await rsiDelay();
+        }
+      }
+
+      return { totalSpend, pledgeCount };
+    } catch (err) {
+      console.error("[SC Bridge] Failed to fetch all pledge values:", err);
+      return { totalSpend: 0, pledgeCount: 0, error: String(err) };
+    }
   }
 
   function sendProgress(phase: string, detail: string, percent: number) {
