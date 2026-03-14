@@ -11,18 +11,24 @@ import {
   type SyncPreferences,
 } from "@/lib/storage";
 import { API_BASE, SYNC_CATEGORIES, type SyncCategoryKey } from "@/lib/constants";
-import type { ExtensionMessage } from "@/lib/types";
+import type { ExtensionMessage, SyncPayload } from "@/lib/types";
+import { filterPayload, toJson, toCsv, downloadFile, type ExportFormat } from "@/lib/export";
 
 // ── Elements ──
 
 const consentScreen = document.getElementById("consent-screen")!;
 const loginScreen = document.getElementById("login-screen")!;
 const mainScreen = document.getElementById("main-screen")!;
+const exportScreen = document.getElementById("export-screen")!;
 
 const consentBtn = document.getElementById("consent-btn")!;
 const loginBtn = document.getElementById("login-btn")!;
 const syncBtn = document.getElementById("sync-btn")!;
 const logoutBtn = document.getElementById("logout-btn")!;
+const exportNavBtn = document.getElementById("export-nav-btn")!;
+const exportBackBtn = document.getElementById("export-back-btn")!;
+const exportBtn = document.getElementById("export-btn")!;
+const exportError = document.getElementById("export-error")!;
 
 const emailInput = document.getElementById("email-input") as HTMLInputElement;
 const passwordInput = document.getElementById(
@@ -33,6 +39,9 @@ const loginError = document.getElementById("login-error")!;
 const categoryTogglesContainer = document.getElementById("category-toggles")!;
 const mainCategoryTogglesContainer = document.getElementById(
   "main-category-toggles",
+)!;
+const exportCategoryTogglesContainer = document.getElementById(
+  "export-category-toggles",
 )!;
 
 const rsiStatus = document.getElementById("rsi-status")!;
@@ -47,10 +56,11 @@ const errorText = document.getElementById("error-text")!;
 
 // ── Screen Management ──
 
-function showScreen(screen: "consent" | "login" | "main") {
+function showScreen(screen: "consent" | "login" | "main" | "export") {
   consentScreen.classList.toggle("hidden", screen !== "consent");
   loginScreen.classList.toggle("hidden", screen !== "login");
   mainScreen.classList.toggle("hidden", screen !== "main");
+  exportScreen.classList.toggle("hidden", screen !== "export");
 }
 
 // ── Status Updates ──
@@ -102,6 +112,9 @@ async function refreshStatus() {
   } else {
     lastSyncSection.classList.add("hidden");
   }
+
+  // Export button — enabled when there's been at least one sync
+  (exportNavBtn as HTMLButtonElement).disabled = !status.lastSync;
 
   // Error
   if (status.error) {
@@ -261,6 +274,98 @@ syncBtn.addEventListener("click", async () => {
 logoutBtn.addEventListener("click", async () => {
   await clearAuthToken();
   await refreshStatus();
+});
+
+// ── Export ──
+
+/** Export preferences are independent of sync preferences — start with all on */
+let exportPrefs: Record<SyncCategoryKey, boolean> = {
+  fleet: true,
+  buyback: true,
+  upgrades: true,
+  account: true,
+  shipNames: true,
+};
+
+function getSelectedExportFormat(): ExportFormat {
+  const checked = document.querySelector(
+    'input[name="export-format"]:checked',
+  ) as HTMLInputElement;
+  return (checked?.value as ExportFormat) ?? "json";
+}
+
+function updateExportButtonState() {
+  const anySelected = Object.values(exportPrefs).some(Boolean);
+  (exportBtn as HTMLButtonElement).disabled = !anySelected;
+}
+
+function initExportToggles() {
+  renderCategoryToggles(
+    exportCategoryTogglesContainer,
+    exportPrefs as SyncPreferences,
+    (key, checked) => {
+      exportPrefs[key] = checked;
+      updateExportButtonState();
+    },
+    true,
+  );
+}
+
+exportNavBtn.addEventListener("click", () => {
+  // Reset export toggles to match current sync prefs each time
+  exportPrefs = { ...currentPrefs };
+  initExportToggles();
+  exportError.classList.add("hidden");
+  updateExportButtonState();
+  showScreen("export");
+});
+
+exportBackBtn.addEventListener("click", () => {
+  showScreen("main");
+});
+
+exportBtn.addEventListener("click", async () => {
+  exportError.classList.add("hidden");
+  (exportBtn as HTMLButtonElement).disabled = true;
+  exportBtn.textContent = "Exporting...";
+
+  try {
+    const response = (await browser.runtime.sendMessage({
+      type: "GET_LAST_PAYLOAD",
+    })) as Extract<ExtensionMessage, { type: "LAST_PAYLOAD" }>;
+
+    if (!response.payload) {
+      throw new Error("No sync data available. Run a sync first.");
+    }
+
+    const filtered = filterPayload(
+      response.payload,
+      exportPrefs as Record<SyncCategoryKey, boolean>,
+    );
+    const format = getSelectedExportFormat();
+    const timestamp = new Date().toISOString().slice(0, 10);
+
+    if (format === "json") {
+      downloadFile(
+        toJson(filtered),
+        `sc-bridge-hangar-${timestamp}.json`,
+        "application/json",
+      );
+    } else {
+      downloadFile(
+        toCsv(filtered),
+        `sc-bridge-hangar-${timestamp}.csv`,
+        "text/csv",
+      );
+    }
+  } catch (err) {
+    exportError.textContent =
+      err instanceof Error ? err.message : "Export failed";
+    exportError.classList.remove("hidden");
+  } finally {
+    exportBtn.textContent = "Export";
+    updateExportButtonState();
+  }
 });
 
 // ── Listen for progress updates from background ──

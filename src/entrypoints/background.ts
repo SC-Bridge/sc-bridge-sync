@@ -7,7 +7,9 @@
 
 import { isRsiLoggedIn } from "@/lib/rsi-client";
 import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
-import type { ExtensionMessage } from "@/lib/types";
+import type { ExtensionMessage, SyncPayload } from "@/lib/types";
+
+const LAST_PAYLOAD_KEY = "last_sync_payload";
 
 export default defineBackground(() => {
   /** Current sync state (in-memory, backed by storage checkpoints) */
@@ -31,8 +33,25 @@ export default defineBackground(() => {
         syncing = false;
         sendResponse({ ok: true });
       }
+
+      if (message.type === "GET_LAST_PAYLOAD") {
+        getLastPayload().then(sendResponse);
+        return true;
+      }
     },
   );
+
+  async function getLastPayload() {
+    const result = await browser.storage.local.get(LAST_PAYLOAD_KEY);
+    return {
+      type: "LAST_PAYLOAD" as const,
+      payload: (result[LAST_PAYLOAD_KEY] as SyncPayload) ?? null,
+    };
+  }
+
+  async function saveLastPayload(payload: SyncPayload) {
+    await browser.storage.local.set({ [LAST_PAYLOAD_KEY]: payload });
+  }
 
   async function handleGetStatus() {
     const [rsiLoggedIn, authToken, consentGiven, lastSync] = await Promise.all([

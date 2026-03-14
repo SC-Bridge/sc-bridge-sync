@@ -113,4 +113,6 @@ export type ExtensionMessage =
     }
   | { type: "SYNC_PROGRESS"; phase: string; detail: string; percent: number }
   | { type: "SYNC_COMPLETE"; timestamp: string }
-  | { type: "SYNC_ERROR"; error: string };
+  | { type: "SYNC_ERROR"; error: string }
+  | { type: "GET_LAST_PAYLOAD" }
+  | { type: "LAST_PAYLOAD"; payload: SyncPayload | null };

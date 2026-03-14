@@ -96,7 +96,52 @@
           <button id="sync-btn" class="btn btn-primary" disabled>
             Sync Now
           </button>
-          <button id="logout-btn" class="btn btn-secondary">Disconnect</button>
+          <div class="btn-row">
+            <button id="export-nav-btn" class="btn btn-secondary" disabled>
+              Export
+            </button>
+            <button id="logout-btn" class="btn btn-secondary">Disconnect</button>
+          </div>
+        </div>
+      </div>
+      <!-- Export -->
+      <div id="export-screen" class="screen hidden">
+        <div class="screen-header">
+          <button id="export-back-btn" class="btn-icon" title="Back">&larr;</button>
+          <h2>Export Hangar Data</h2>
+        </div>
+
+        <p>Choose what to include and the file format.</p>
+
+        <h3>Data to export</h3>
+        <div id="export-category-toggles" class="category-list">
+          <!-- Populated by main.ts -->
+        </div>
+
+        <h3>Format</h3>
+        <div class="format-picker">
+          <label class="format-option">
+            <input type="radio" name="export-format" value="json" checked />
+            <span class="format-info">
+              <span class="format-label">JSON</span>
+              <span class="format-desc">Full fidelity, nested structure</span>
+            </span>
+          </label>
+          <label class="format-option">
+            <input type="radio" name="export-format" value="csv" />
+            <span class="format-info">
+              <span class="format-label">CSV</span>
+              <span class="format-desc">Spreadsheet-friendly, one row per item</span>
+            </span>
+          </label>
+        </div>
+
+        <div id="export-error" class="error hidden"></div>
+
+        <div class="actions">
+          <button id="export-btn" class="btn btn-primary" disabled>
+            Export
+          </button>
         </div>
       </div>
     </div>
