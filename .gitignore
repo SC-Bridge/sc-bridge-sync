@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-zip/
+.output/
+web-ext-artifacts/
+
+# WXT
+.wxt/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# AI / Claude / LLM
+.claude/
+CLAUDE.md
+claude.md
+.claude.*
+.cursorrules
+.cursor/
+.aider*
+.copilot/
+.github/copilot/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.bak

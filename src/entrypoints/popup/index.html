@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SC Bridge Sync</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Onboarding / Consent -->
+      <div id="consent-screen" class="screen hidden">
+        <h2>SC Bridge Sync</h2>
+        <p>
+          This extension reads your RSI hangar data and sends it to
+          <strong>scbridge.app</strong> to keep your fleet in sync.
+        </p>
+        <h3>What we access:</h3>
+        <ul>
+          <li>Your RSI authentication cookie (used only for API calls)</li>
+          <li>Pledge data: ships, insurance, skins, items</li>
+          <li>CCU/upgrade history</li>
+          <li>Custom ship names</li>
+          <li>Account metadata (concierge level, org, balances)</li>
+        </ul>
+        <h3>What we do NOT do:</h3>
+        <ul>
+          <li>Store your RSI credentials or session token</li>
+          <li>Make purchases or modify your hangar</li>
+          <li>Share your data with third parties</li>
+        </ul>
+        <p>
+          By continuing, you agree to our
+          <a href="https://scbridge.app/privacy/extension" target="_blank"
+            >Privacy Policy</a
+          >.
+        </p>
+        <button id="consent-btn" class="btn btn-primary">
+          I understand — continue
+        </button>
+      </div>
+
+      <!-- Login -->
+      <div id="login-screen" class="screen hidden">
+        <h2>Connect to SC Bridge</h2>
+        <p>Log into your SC Bridge account to link the extension.</p>
+        <div class="form-group">
+          <label for="email-input">Email</label>
+          <input type="email" id="email-input" placeholder="you@example.com" />
+        </div>
+        <div class="form-group">
+          <label for="password-input">Password</label>
+          <input type="password" id="password-input" />
+        </div>
+        <button id="login-btn" class="btn btn-primary">Log in</button>
+        <p id="login-error" class="error hidden"></p>
+      </div>
+
+      <!-- Main / Sync -->
+      <div id="main-screen" class="screen hidden">
+        <h2>SC Bridge Sync</h2>
+        <div id="status-section">
+          <div class="status-row">
+            <span>RSI</span>
+            <span id="rsi-status" class="badge">checking...</span>
+          </div>
+          <div class="status-row">
+            <span>SC Bridge</span>
+            <span id="scbridge-status" class="badge">checking...</span>
+          </div>
+        </div>
+
+        <div id="last-sync-section" class="hidden">
+          <p>Last sync: <span id="last-sync-time"></span></p>
+        </div>
+
+        <div id="progress-section" class="hidden">
+          <div class="progress-bar">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <p id="progress-text"></p>
+        </div>
+
+        <div id="error-section" class="hidden">
+          <p id="error-text" class="error"></p>
+        </div>
+
+        <div class="actions">
+          <button id="sync-btn" class="btn btn-primary" disabled>
+            Sync Now
+          </button>
+          <button id="logout-btn" class="btn btn-secondary">Disconnect</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
