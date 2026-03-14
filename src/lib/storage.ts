@@ -5,7 +5,7 @@
  * persisted here rather than held in memory.
  */
 
-import { STORAGE_KEYS } from "./constants";
+import { STORAGE_KEYS, SYNC_CATEGORIES, type SyncCategoryKey } from "./constants";
 
 /** Get whether the user has given consent for data sync */
 export async function hasConsent(): Promise<boolean> {
@@ -65,10 +65,44 @@ export async function clearSyncCheckpoint(): Promise<void> {
   await browser.storage.local.remove(STORAGE_KEYS.syncCheckpoint);
 }
 
+// ── Sync Preferences ──
+
+/** Which data categories the user wants to sync */
+export type SyncPreferences = Record<SyncCategoryKey, boolean>;
+
+/** Get sync preferences, falling back to defaults */
+export async function getSyncPreferences(): Promise<SyncPreferences> {
+  const result = await browser.storage.local.get(STORAGE_KEYS.syncPreferences);
+  const stored = result[STORAGE_KEYS.syncPreferences] as
+    | Partial<SyncPreferences>
+    | undefined;
+
+  const defaults: SyncPreferences = {} as SyncPreferences;
+  for (const [key, cat] of Object.entries(SYNC_CATEGORIES)) {
+    defaults[key as SyncCategoryKey] = stored?.[key as SyncCategoryKey] ?? cat.default;
+  }
+  return defaults;
+}
+
+/** Save sync preferences */
+export async function setSyncPreferences(
+  prefs: SyncPreferences,
+): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEYS.syncPreferences]: prefs });
+}
+
+/** Check if a specific category is enabled */
+export async function isCategoryEnabled(
+  key: SyncCategoryKey,
+): Promise<boolean> {
+  const prefs = await getSyncPreferences();
+  return prefs[key];
+}
+
 /** Checkpoint for resumable sync */
 export interface SyncCheckpoint {
-  /** Which phase: pledges, upgrades, account */
-  phase: "pledges" | "upgrades" | "account" | "upload";
+  /** Which phase: pledges, buyback, upgrades, account */
+  phase: "pledges" | "buyback" | "upgrades" | "account" | "upload";
   /** Current page (for paginated pledge fetching) */
   page?: number;
   /** Pledges collected so far */

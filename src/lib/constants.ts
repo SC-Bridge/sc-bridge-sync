@@ -11,6 +11,8 @@ export const RSI_BASE = "https://robertsspaceindustries.com";
 export const RSI_API = {
   /** List pledges (paginated) */
   pledges: "/api/account/pledges",
+  /** List buy-back pledges (paginated) */
+  buybackPledges: "/api/account/buyBackPledges",
   /** Upgrade log for a specific pledge */
   upgradeLog: "/api/account/upgradeLog",
   /** Account info */
@@ -32,4 +34,45 @@ export const STORAGE_KEYS = {
   consentGiven: "consent_given",
   /** In-progress sync checkpoint */
   syncCheckpoint: "sync_checkpoint",
+  /** User's sync preferences (which data categories to include) */
+  syncPreferences: "sync_preferences",
 } as const;
+
+/**
+ * High-level data categories the user can toggle.
+ * Each maps to one or more data types in the sync payload.
+ */
+export const SYNC_CATEGORIES = {
+  fleet: {
+    key: "fleet" as const,
+    label: "Fleet & Pledges",
+    description: "Ships, vehicles, insurance, skins, and pledge details",
+    default: true,
+  },
+  buyback: {
+    key: "buyback" as const,
+    label: "Buy-Back Pledges",
+    description: "Melted pledges available for reclaim",
+    default: true,
+  },
+  upgrades: {
+    key: "upgrades" as const,
+    label: "Upgrade History",
+    description: "CCU chains and applied upgrades per pledge",
+    default: true,
+  },
+  account: {
+    key: "account" as const,
+    label: "Account Info",
+    description: "Concierge level, subscriber status, org, balances",
+    default: true,
+  },
+  shipNames: {
+    key: "shipNames" as const,
+    label: "Custom Ship Names",
+    description: "Your named ships (e.g. Jean-Luc, James Holden)",
+    default: true,
+  },
+} as const;
+
+export type SyncCategoryKey = keyof typeof SYNC_CATEGORIES;

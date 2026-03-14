@@ -26,6 +26,21 @@ export interface RsiPledgeItem {
   is_nameable?: boolean;
 }
 
+/** A buy-back pledge — melted and available for reclaim */
+export interface RsiBuyBackPledge {
+  id: number;
+  name: string;
+  value: string;
+  value_cents?: number;
+  date: string;
+  date_parsed?: string;
+  items: RsiPledgeItem[];
+  /** Whether it can be reclaimed with store credit */
+  is_credit_reclaimable: boolean;
+  /** Token cost if applicable */
+  token_cost?: number;
+}
+
 /** A CCU/upgrade entry from RSI's /api/account/upgradeLog */
 export interface RsiUpgrade {
   pledge_id: number;
@@ -59,6 +74,7 @@ export interface RsiAccountInfo {
 /** The full sync payload sent to SC Bridge API */
 export interface SyncPayload {
   pledges: RsiPledge[];
+  buyback_pledges: RsiBuyBackPledge[];
   upgrades: RsiUpgrade[];
   account: RsiAccountInfo | null;
   named_ships: NamedShip[];
@@ -66,6 +82,7 @@ export interface SyncPayload {
     extension_version: string;
     synced_at: string;
     pledge_count: number;
+    buyback_count: number;
     ship_count: number;
     item_count: number;
   };

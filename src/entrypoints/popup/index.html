@@ -15,29 +15,28 @@
           This extension reads your RSI hangar data and sends it to
           <strong>scbridge.app</strong> to keep your fleet in sync.
         </p>
-        <h3>What we access:</h3>
-        <ul>
-          <li>Your RSI authentication cookie (used only for API calls)</li>
-          <li>Pledge data: ships, insurance, skins, items</li>
-          <li>CCU/upgrade history</li>
-          <li>Custom ship names</li>
-          <li>Account metadata (concierge level, org, balances)</li>
-        </ul>
-        <h3>What we do NOT do:</h3>
-        <ul>
-          <li>Store your RSI credentials or session token</li>
-          <li>Make purchases or modify your hangar</li>
-          <li>Share your data with third parties</li>
-        </ul>
-        <p>
-          By continuing, you agree to our
-          <a href="https://scbridge.app/privacy/extension" target="_blank"
-            >Privacy Policy</a
-          >.
-        </p>
-        <button id="consent-btn" class="btn btn-primary">
-          I understand — continue
-        </button>
+
+        <h3>Choose what to sync</h3>
+        <div id="category-toggles" class="category-list">
+          <!-- Populated by main.ts from SYNC_CATEGORIES -->
+        </div>
+
+        <div class="consent-footer">
+          <p class="fine-print">
+            Your RSI session token is used only for API calls and is never
+            stored. We do not make purchases, modify your hangar, or share your
+            data with third parties.
+          </p>
+          <p class="fine-print">
+            By continuing, you agree to our
+            <a href="https://scbridge.app/privacy/extension" target="_blank"
+              >Privacy Policy</a
+            >.
+          </p>
+          <button id="consent-btn" class="btn btn-primary">
+            Continue
+          </button>
+        </div>
       </div>
 
       <!-- Login -->
@@ -84,6 +83,14 @@
         <div id="error-section" class="hidden">
           <p id="error-text" class="error"></p>
         </div>
+
+        <!-- Sync preferences (collapsible) -->
+        <details id="preferences-section" class="preferences">
+          <summary>Sync preferences</summary>
+          <div id="main-category-toggles" class="category-list compact">
+            <!-- Populated by main.ts -->
+          </div>
+        </details>
 
         <div class="actions">
           <button id="sync-btn" class="btn btn-primary" disabled>

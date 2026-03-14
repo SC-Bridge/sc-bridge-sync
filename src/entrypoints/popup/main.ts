@@ -2,8 +2,15 @@
  * Popup UI controller — manages screen transitions and user interactions.
  */
 
-import { setConsent, hasConsent, setAuthToken, clearAuthToken } from "@/lib/storage";
-import { API_BASE } from "@/lib/constants";
+import {
+  setConsent,
+  setAuthToken,
+  clearAuthToken,
+  getSyncPreferences,
+  setSyncPreferences,
+  type SyncPreferences,
+} from "@/lib/storage";
+import { API_BASE, SYNC_CATEGORIES, type SyncCategoryKey } from "@/lib/constants";
 import type { ExtensionMessage } from "@/lib/types";
 
 // ── Elements ──
@@ -22,6 +29,11 @@ const passwordInput = document.getElementById(
   "password-input",
 ) as HTMLInputElement;
 const loginError = document.getElementById("login-error")!;
+
+const categoryTogglesContainer = document.getElementById("category-toggles")!;
+const mainCategoryTogglesContainer = document.getElementById(
+  "main-category-toggles",
+)!;
 
 const rsiStatus = document.getElementById("rsi-status")!;
 const scbridgeStatus = document.getElementById("scbridge-status")!;
@@ -100,10 +112,95 @@ async function refreshStatus() {
   }
 }
 
+// ── Category Toggles ──
+
+/**
+ * Render category toggle checkboxes into a container.
+ * `showDescriptions` controls whether the subtitle is visible (consent screen: yes, main screen: no).
+ */
+function renderCategoryToggles(
+  container: HTMLElement,
+  prefs: SyncPreferences,
+  onChange: (key: SyncCategoryKey, checked: boolean) => void,
+  showDescriptions: boolean,
+) {
+  container.innerHTML = "";
+
+  for (const [key, cat] of Object.entries(SYNC_CATEGORIES)) {
+    const label = document.createElement("label");
+    label.className = "category-toggle";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = prefs[key as SyncCategoryKey];
+    checkbox.dataset.category = key;
+    checkbox.addEventListener("change", () => {
+      onChange(key as SyncCategoryKey, checkbox.checked);
+    });
+
+    const info = document.createElement("span");
+    info.className = "category-info";
+    info.innerHTML = `<span class="category-label">${cat.label}</span>${
+      showDescriptions
+        ? `<span class="category-desc">${cat.description}</span>`
+        : ""
+    }`;
+
+    label.appendChild(checkbox);
+    label.appendChild(info);
+    container.appendChild(label);
+  }
+}
+
+/** Sync the checked state between consent and main toggle containers */
+function syncToggleContainers(
+  source: HTMLElement,
+  target: HTMLElement,
+  key: string,
+  checked: boolean,
+) {
+  const targetCheckbox = target.querySelector(
+    `input[data-category="${key}"]`,
+  ) as HTMLInputElement | null;
+  if (targetCheckbox) {
+    targetCheckbox.checked = checked;
+  }
+}
+
+/** Current in-memory prefs (loaded on init, persisted on change) */
+let currentPrefs: SyncPreferences;
+
+async function initToggles() {
+  currentPrefs = await getSyncPreferences();
+
+  const handleChange = async (key: SyncCategoryKey, checked: boolean) => {
+    currentPrefs[key] = checked;
+    await setSyncPreferences(currentPrefs);
+
+    // Keep both containers in sync
+    syncToggleContainers(
+      categoryTogglesContainer,
+      mainCategoryTogglesContainer,
+      key,
+      checked,
+    );
+    syncToggleContainers(
+      mainCategoryTogglesContainer,
+      categoryTogglesContainer,
+      key,
+      checked,
+    );
+  };
+
+  renderCategoryToggles(categoryTogglesContainer, currentPrefs, handleChange, true);
+  renderCategoryToggles(mainCategoryTogglesContainer, currentPrefs, handleChange, false);
+}
+
 // ── Event Handlers ──
 
 consentBtn.addEventListener("click", async () => {
   await setConsent(true);
+  // Preferences are already persisted via toggle onChange
   showScreen("login");
 });
 
@@ -191,4 +288,5 @@ browser.runtime.onMessage.addListener((message: ExtensionMessage) => {
 
 // ── Init ──
 
+initToggles();
 refreshStatus();

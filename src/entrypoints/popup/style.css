@@ -169,6 +169,94 @@ a {
   font-size: 13px;
 }
 
+/* Category toggles */
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.category-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  background: #16213e;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.category-toggle:hover {
+  background: #1a2745;
+}
+
+.category-toggle input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: #1e88e5;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.category-toggle .category-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.category-toggle .category-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e0e0e0;
+  display: block;
+}
+
+.category-toggle .category-desc {
+  font-size: 12px;
+  color: #9e9e9e;
+  margin-top: 2px;
+  display: block;
+}
+
+.category-list.compact .category-toggle {
+  padding: 6px 10px;
+}
+
+.category-list.compact .category-desc {
+  display: none;
+}
+
+/* Consent footer */
+.consent-footer {
+  margin-top: 12px;
+}
+
+.fine-print {
+  font-size: 12px;
+  color: #9e9e9e;
+  margin-bottom: 8px;
+}
+
+/* Preferences (main screen) */
+.preferences {
+  margin-top: 12px;
+}
+
+.preferences summary {
+  font-size: 13px;
+  color: #b0b0b0;
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.preferences summary:hover {
+  color: #e0e0e0;
+}
+
+.preferences[open] summary {
+  margin-bottom: 8px;
+}
+
 /* Actions */
 .actions {
   margin-top: 16px;
