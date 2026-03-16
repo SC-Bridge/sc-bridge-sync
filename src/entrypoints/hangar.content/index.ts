@@ -774,7 +774,6 @@ async function getRsiToken(): Promise<string | null> {
 
 async function rsiPostFromContent<T>(path: string, body: Record<string, unknown> = {}): Promise<T | null> {
   const token = await getRsiToken();
-  console.log(`[SC Bridge] rsiPostFromContent: ${path}`, { hasToken: !!token, body });
   const response = await fetch(path, {
     method: "POST",
     headers: {
@@ -784,10 +783,8 @@ async function rsiPostFromContent<T>(path: string, body: Record<string, unknown>
     body: JSON.stringify(body),
     credentials: "same-origin",
   });
-  console.log(`[SC Bridge] rsiPostFromContent: ${path} → ${response.status}`);
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    console.warn(`[SC Bridge] RSI POST ${path} returned ${response.status}:`, text.slice(0, 200));
+    console.warn(`[SC Bridge] RSI POST ${path} returned ${response.status}`);
     return null;
   }
   const text = await response.text();
@@ -817,11 +814,10 @@ async function handleCollectAll(): Promise<SyncPayload> {
 
   const noop = () => {};
 
-  console.log("[SC Bridge] handleCollectAll: starting parallel collection...");
   const [account, buybacks, upgrades] = await Promise.all([
-    collectAccountInfo(noop).then((r) => { console.log("[SC Bridge] collectAccountInfo done:", r?.nickname ?? "null"); return r; }),
-    collectBuyBackPledges(noop).then((r) => { console.log("[SC Bridge] collectBuyBackPledges done:", r.length, "items"); return r; }),
-    collectUpgradeLogs(inventory.map((e) => e.data), noop).then((r) => { console.log("[SC Bridge] collectUpgradeLogs done:", r.length, "items"); return r; }),
+    collectAccountInfo(noop),
+    collectBuyBackPledges(noop),
+    collectUpgradeLogs(inventory.map((e) => e.data), noop),
   ]);
 
   const pledges = inventory.map((e) => e.data);
@@ -1124,7 +1120,6 @@ async function collectBuyBackPledges(
       const doc = parser.parseFromString(html, "text/html");
 
       const pledgeEls = doc.querySelectorAll("article.pledge");
-      console.log(`[SC Bridge] Buyback page ${page}: ${pledgeEls.length} pledges`);
       if (pledgeEls.length === 0) break;
 
       for (const el of pledgeEls) {

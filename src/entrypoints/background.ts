@@ -12,8 +12,6 @@ import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 const LAST_PAYLOAD_KEY = "last_sync_payload";
 
 export default defineBackground(() => {
-  console.log("[SC Bridge BG] Background service worker started");
-
   /** Current sync state (in-memory, backed by storage checkpoints) */
   let syncing = false;
   let lastError: string | null = null;
@@ -21,8 +19,6 @@ export default defineBackground(() => {
   /** Handle messages from the popup and content scripts */
   browser.runtime.onMessage.addListener(
     (message: ExtensionMessage, _sender, sendResponse) => {
-      console.log("[SC Bridge BG] Message received:", message.type, "from:", _sender?.tab?.url || _sender?.url || "unknown");
-
       if (message.type === "GET_STATUS") {
         handleGetStatus().then(sendResponse);
         return true; // async response
@@ -71,10 +67,7 @@ export default defineBackground(() => {
     { type: "COLLECT_RESULT"; payload: SyncPayload } | { type: "COLLECT_ERROR"; error: string }
   > {
     try {
-      console.log("[SC Bridge BG] handleBridgeCollect started");
-
       const rsiOk = await isRsiLoggedIn();
-      console.log("[SC Bridge BG] RSI logged in:", rsiOk);
       if (!rsiOk) {
         return { type: "COLLECT_ERROR", error: "Not logged into RSI" };
       }
@@ -83,20 +76,16 @@ export default defineBackground(() => {
       const existingTabs = await browser.tabs.query({
         url: "*://robertsspaceindustries.com/*/account/pledges*",
       });
-      console.log("[SC Bridge BG] Existing RSI tabs:", existingTabs.length, existingTabs.map((t) => ({ id: t.id, url: t.url, status: t.status })));
 
       let tabId: number;
       let isNewTab = false;
 
       if (existingTabs.length > 0 && existingTabs[0].id != null) {
         tabId = existingTabs[0].id;
-        console.log("[SC Bridge BG] Using existing tab:", tabId, "status:", existingTabs[0].status);
         if (existingTabs[0].status !== "complete") {
-          console.log("[SC Bridge BG] Waiting for tab to complete...");
           await waitForTabComplete(tabId);
         }
       } else {
-        console.log("[SC Bridge BG] No RSI tab found, creating new one...");
         const newTab = await browser.tabs.create({
           url: "https://robertsspaceindustries.com/en/account/pledges",
           active: false,
@@ -106,20 +95,13 @@ export default defineBackground(() => {
         }
         tabId = newTab.id;
         isNewTab = true;
-        console.log("[SC Bridge BG] Created tab:", tabId, "waiting for load...");
         await waitForTabComplete(tabId);
-        console.log("[SC Bridge BG] Tab loaded");
       }
 
       // Content scripts inject at document_idle — give a brief window after tab load
       if (isNewTab) {
-        console.log("[SC Bridge BG] New tab — waiting 2s for content script injection...");
         await new Promise((r) => setTimeout(r, 2000));
       }
-
-      // Check the tab's actual URL (RSI might have redirected)
-      const tabInfo = await browser.tabs.get(tabId);
-      console.log("[SC Bridge BG] Tab URL after load:", tabInfo.url, "status:", tabInfo.status);
 
       // Send collect command to the hangar content script.
       // If the tab was open before the extension was installed/reloaded, the content
@@ -128,17 +110,13 @@ export default defineBackground(() => {
       let reloaded = false;
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
-          console.log("[SC Bridge BG] tabs.sendMessage attempt", attempt + 1, "to tab", tabId);
           result = await browser.tabs.sendMessage(tabId, { type: "COLLECT_ALL_DATA" });
-          console.log("[SC Bridge BG] tabs.sendMessage success:", (result as Record<string, unknown>)?.type || typeof result);
           break;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          console.log("[SC Bridge BG] tabs.sendMessage attempt", attempt + 1, "failed:", errMsg);
 
           // Content script not injected — reload the tab once to trigger injection
           if (!reloaded && errMsg.includes("Could not establish connection")) {
-            console.log("[SC Bridge BG] Reloading tab to inject content script...");
             await browser.tabs.reload(tabId);
             await waitForTabComplete(tabId);
             // Wait for content script to init after page load
