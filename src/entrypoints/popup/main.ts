@@ -61,7 +61,7 @@ async function refreshStatus() {
   const envOverride = await getEnvOverride();
 
   // Update settings link
-  settingsLink.href = `${apiBase}/settings`;
+  settingsLink.href = `${apiBase}/sync-import`;
 
   // Show environment badge if not production
   if (envOverride === "staging") {
