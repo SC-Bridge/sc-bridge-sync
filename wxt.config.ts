@@ -16,6 +16,18 @@ export default defineConfig({
       gecko: {
         id: "sync@scbridge.app",
         strict_min_version: "128.0",
+        data_collection_permissions: {
+          personally_identifiable_information: true,
+          health_information: false,
+          financial_and_payment_information: false,
+          authentication_information: true,
+          personal_communications: false,
+          location: false,
+          web_history: false,
+          user_activity: false,
+          website_content: true,
+          technical_and_interaction_data: false,
+        },
       },
     },
   },
