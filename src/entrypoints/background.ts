@@ -5,21 +5,24 @@
  * browser.storage.local so sync can resume after termination.
  */
 
-import { isRsiLoggedIn, rsiPost, rsiDelay } from "@/lib/rsi-client";
+import { isRsiLoggedIn, getRsiToken } from "@/lib/rsi-client";
 import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
-import { RSI_API } from "@/lib/constants";
 import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 
 const LAST_PAYLOAD_KEY = "last_sync_payload";
 
 export default defineBackground(() => {
+  console.log("[SC Bridge BG] Background service worker started");
+
   /** Current sync state (in-memory, backed by storage checkpoints) */
   let syncing = false;
   let lastError: string | null = null;
 
-  /** Handle messages from the popup */
+  /** Handle messages from the popup and content scripts */
   browser.runtime.onMessage.addListener(
     (message: ExtensionMessage, _sender, sendResponse) => {
+      console.log("[SC Bridge BG] Message received:", message.type, "from:", _sender?.tab?.url || _sender?.url || "unknown");
+
       if (message.type === "GET_STATUS") {
         handleGetStatus().then(sendResponse);
         return true; // async response
@@ -35,13 +38,18 @@ export default defineBackground(() => {
         sendResponse({ ok: true });
       }
 
+      if (message.type === "GET_RSI_TOKEN") {
+        getRsiToken().then((token) => sendResponse({ token }));
+        return true;
+      }
+
       if (message.type === "GET_LAST_PAYLOAD") {
         getLastPayload().then(sendResponse);
         return true;
       }
 
-      if (message.type === "FETCH_ALL_PLEDGE_VALUES") {
-        fetchAllPledgeValues().then(sendResponse);
+      if (message.type === "BRIDGE_COLLECT_HANGAR") {
+        handleBridgeCollect().then(sendResponse);
         return true;
       }
     },
@@ -57,6 +65,130 @@ export default defineBackground(() => {
 
   async function saveLastPayload(payload: SyncPayload) {
     await browser.storage.local.set({ [LAST_PAYLOAD_KEY]: payload });
+  }
+
+  async function handleBridgeCollect(): Promise<
+    { type: "COLLECT_RESULT"; payload: SyncPayload } | { type: "COLLECT_ERROR"; error: string }
+  > {
+    try {
+      console.log("[SC Bridge BG] handleBridgeCollect started");
+
+      const rsiOk = await isRsiLoggedIn();
+      console.log("[SC Bridge BG] RSI logged in:", rsiOk);
+      if (!rsiOk) {
+        return { type: "COLLECT_ERROR", error: "Not logged into RSI" };
+      }
+
+      // Find an existing RSI pledges tab
+      const existingTabs = await browser.tabs.query({
+        url: "*://robertsspaceindustries.com/*/account/pledges*",
+      });
+      console.log("[SC Bridge BG] Existing RSI tabs:", existingTabs.length, existingTabs.map((t) => ({ id: t.id, url: t.url, status: t.status })));
+
+      let tabId: number;
+      let isNewTab = false;
+
+      if (existingTabs.length > 0 && existingTabs[0].id != null) {
+        tabId = existingTabs[0].id;
+        console.log("[SC Bridge BG] Using existing tab:", tabId, "status:", existingTabs[0].status);
+        if (existingTabs[0].status !== "complete") {
+          console.log("[SC Bridge BG] Waiting for tab to complete...");
+          await waitForTabComplete(tabId);
+        }
+      } else {
+        console.log("[SC Bridge BG] No RSI tab found, creating new one...");
+        const newTab = await browser.tabs.create({
+          url: "https://robertsspaceindustries.com/en/account/pledges",
+          active: false,
+        });
+        if (newTab.id == null) {
+          return { type: "COLLECT_ERROR", error: "Failed to create RSI tab" };
+        }
+        tabId = newTab.id;
+        isNewTab = true;
+        console.log("[SC Bridge BG] Created tab:", tabId, "waiting for load...");
+        await waitForTabComplete(tabId);
+        console.log("[SC Bridge BG] Tab loaded");
+      }
+
+      // Content scripts inject at document_idle — give a brief window after tab load
+      if (isNewTab) {
+        console.log("[SC Bridge BG] New tab — waiting 2s for content script injection...");
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      // Check the tab's actual URL (RSI might have redirected)
+      const tabInfo = await browser.tabs.get(tabId);
+      console.log("[SC Bridge BG] Tab URL after load:", tabInfo.url, "status:", tabInfo.status);
+
+      // Send collect command to the hangar content script.
+      // If the tab was open before the extension was installed/reloaded, the content
+      // script won't be injected. Detect this and reload the tab to trigger injection.
+      let result: unknown;
+      let reloaded = false;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          console.log("[SC Bridge BG] tabs.sendMessage attempt", attempt + 1, "to tab", tabId);
+          result = await browser.tabs.sendMessage(tabId, { type: "COLLECT_ALL_DATA" });
+          console.log("[SC Bridge BG] tabs.sendMessage success:", (result as Record<string, unknown>)?.type || typeof result);
+          break;
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.log("[SC Bridge BG] tabs.sendMessage attempt", attempt + 1, "failed:", errMsg);
+
+          // Content script not injected — reload the tab once to trigger injection
+          if (!reloaded && errMsg.includes("Could not establish connection")) {
+            console.log("[SC Bridge BG] Reloading tab to inject content script...");
+            await browser.tabs.reload(tabId);
+            await waitForTabComplete(tabId);
+            // Wait for content script to init after page load
+            await new Promise((r) => setTimeout(r, 3000));
+            reloaded = true;
+            continue;
+          }
+
+          if (attempt === 3) throw err;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+
+      if (result?.type === "COLLECT_ERROR") {
+        return result;
+      }
+
+      // Save the payload for later retrieval
+      const payload = result as SyncPayload;
+      await saveLastPayload(payload);
+
+      return { type: "COLLECT_RESULT", payload };
+    } catch (err) {
+      return {
+        type: "COLLECT_ERROR",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  function waitForTabComplete(tabId: number, timeoutMs = 30000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        browser.tabs.onUpdated.removeListener(listener);
+        reject(new Error("Timed out waiting for RSI tab to load"));
+      }, timeoutMs);
+
+      function listener(
+        updatedTabId: number,
+        changeInfo: browser.Tabs.OnUpdatedChangeInfoType,
+      ) {
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          clearTimeout(timer);
+          browser.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      }
+
+      browser.tabs.onUpdated.addListener(listener);
+    });
   }
 
   async function handleGetStatus() {
@@ -116,7 +248,7 @@ export default defineBackground(() => {
 
   async function runSync() {
     // TODO: Implement the full sync pipeline
-    // Phase 1: Fetch all pledges (paginated)
+    // Phase 1: Fetch all pledges (paginated HTML scraping)
     // Phase 2: Fetch upgrade logs for upgraded pledges
     // Phase 3: Fetch account info
     // Phase 4: Extract named ships from pledge items
@@ -133,61 +265,6 @@ export default defineBackground(() => {
       type: "SYNC_COMPLETE",
       timestamp,
     });
-  }
-
-  /**
-   * Fetch all pledge pages from RSI and calculate total spend.
-   * Used by the content script to display total across all pages.
-   */
-  async function fetchAllPledgeValues() {
-    try {
-      const rsiOk = await isRsiLoggedIn();
-      if (!rsiOk) {
-        return { totalSpend: 0, pledgeCount: 0, error: "Not logged in" };
-      }
-
-      let page = 1;
-      let totalSpend = 0;
-      let pledgeCount = 0;
-      let hasMore = true;
-
-      while (hasMore) {
-        const response = await rsiPost<{
-          data?: { pledges?: Array<{ value?: string; amount?: number }> };
-          success?: number;
-        }>(RSI_API.pledges, { page, pagesize: 100 });
-
-        const pledges = response?.data?.pledges ?? [];
-        if (pledges.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        for (const pledge of pledges) {
-          pledgeCount++;
-          // Value is typically "$X.XX" or a numeric string
-          const valStr = pledge.value ?? "";
-          const match = valStr.toString().replace(/[$,]/g, "");
-          const num = parseFloat(match);
-          if (!isNaN(num)) {
-            totalSpend += num;
-          }
-        }
-
-        // RSI pages are 1-indexed; stop if we got fewer than requested
-        if (pledges.length < 100) {
-          hasMore = false;
-        } else {
-          page++;
-          await rsiDelay();
-        }
-      }
-
-      return { totalSpend, pledgeCount };
-    } catch (err) {
-      console.error("[SC Bridge] Failed to fetch all pledge values:", err);
-      return { totalSpend: 0, pledgeCount: 0, error: String(err) };
-    }
   }
 
   function sendProgress(phase: string, detail: string, percent: number) {

@@ -1,6 +1,6 @@
 /* ── SC Bridge Hangar Enhancement ──
- * Matches RSI's dark theme while being clearly identifiable
- * as SC Bridge additions.
+ * Toolbar injected above RSI's native pledge list.
+ * Native <li> nodes are moved in/out of .list-items — never destroyed.
  */
 
 #scb-toolbar {
@@ -33,6 +33,7 @@
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .scb-filter-btn {
@@ -62,11 +63,43 @@
   color: #0d1b2a;
 }
 
+.scb-filter-btn.excluded {
+  background: #3a1a1a;
+  border-color: #6a2a2a;
+  color: #f87171;
+  text-decoration: line-through;
+}
+
+.scb-filter-btn.excluded:hover {
+  background: #4a2a2a;
+  border-color: #8a3a3a;
+  color: #fca5a5;
+}
+
+.scb-filter-sep {
+  width: 1px;
+  height: 20px;
+  background: #2a4a6b;
+  margin: 0 2px;
+}
+
+.scb-filter-all {
+  border-color: #3a6a9b;
+}
+
+.scb-filter-hint {
+  color: #3a5a7a;
+  font-size: 10px;
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+}
+
 /* ── Search ── */
 
-.scb-search-wrap {
-  flex: 1;
-  min-width: 180px;
+.scb-search-row {
+  margin-top: 6px !important;
+  padding-top: 0 !important;
+  border-top: none !important;
 }
 
 .scb-search {
@@ -80,27 +113,15 @@
   font-family: inherit;
   outline: none;
   transition: border-color 0.15s;
+  box-sizing: border-box;
 }
 
-.scb-search::placeholder {
-  color: #4a6a8a;
-}
+.scb-search::placeholder { color: #4a6a8a; }
+.scb-search:focus { border-color: #00b4d8; }
 
-.scb-search:focus {
-  border-color: #00b4d8;
-}
+/* ── Total Row ── */
 
-/* ── Stats Row ── */
-
-.scb-stats-row {
-  justify-content: space-between;
-}
-
-.scb-stats {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.scb-total-row { gap: 8px; }
 
 .scb-total-label {
   color: #6a8aaa;
@@ -116,10 +137,10 @@
   letter-spacing: 0.5px;
 }
 
-.scb-pledge-count {
-  color: #4a6a8a;
-  font-size: 12px;
-}
+/* ── Detail Row ── */
+
+.scb-detail-row { justify-content: space-between; }
+.scb-pledge-count { color: #6a8aaa; font-size: 12px; }
 
 /* ── Action Buttons ── */
 
@@ -150,10 +171,7 @@
   border-color: #3a6a9b;
 }
 
-.scb-action-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.scb-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .scb-sync-btn {
   background: linear-gradient(135deg, #0077b6 0%, #00b4d8 100%);
@@ -168,13 +186,359 @@
   color: #ffffff;
 }
 
-/* ── Hidden pledge cards (via filter) ── */
+/* ── Base Pledge Label ── */
 
-[data-scb-index][style*="display: none"] {
-  /* Ensure filtered items don't take space */
-  margin: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  height: 0 !important;
-  overflow: hidden !important;
+.scb-base-pledge {
+  color: #6a8aaa;
+  font-size: 11px;
+  margin-top: 2px;
+  font-style: italic;
+}
+
+/* ── Image Popup ── */
+
+.scb-image-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scb-popup-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.scb-popup-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.scb-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #0d1b2a;
+  border: 1px solid #2a4a6b;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+
+.scb-popup-title {
+  color: #c0d8ef;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "Electrolize", "Orbitron", -apple-system, sans-serif;
+}
+
+.scb-popup-close {
+  background: none;
+  border: none;
+  color: #6a8aaa;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.scb-popup-close:hover {
+  color: #f87171;
+}
+
+.scb-popup-img-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 300px;
+  min-height: 200px;
+  background: #0d1b2a;
+  border: 1px solid #2a4a6b;
+  border-radius: 0 0 4px 4px;
+}
+
+.scb-popup-img {
+  max-width: 90vw;
+  max-height: calc(90vh - 40px);
+  object-fit: contain;
+}
+
+.scb-popup-thumb {
+  filter: blur(2px);
+  image-rendering: auto;
+}
+
+.scb-popup-loading {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  color: #4a6a8a;
+  font-size: 11px;
+  font-family: "Electrolize", "Orbitron", -apple-system, sans-serif;
+}
+
+/* ── Export Modal ── */
+
+.scb-export-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scb-export-panel {
+  position: relative;
+  width: 460px;
+  max-width: 90vw;
+  max-height: 90vh;
+  background: #0d1b2a;
+  border: 1px solid #2a4a6b;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  font-family: "Electrolize", "Orbitron", -apple-system, sans-serif;
+}
+
+.scb-export-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.scb-export-title {
+  color: #c0d8ef;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.scb-export-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.scb-export-section {
+  margin-bottom: 16px;
+}
+
+.scb-export-section:last-child {
+  margin-bottom: 0;
+}
+
+.scb-export-section-label {
+  color: #6a8aaa;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.scb-export-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scb-export-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #16293d;
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.scb-export-toggle:hover {
+  border-color: #2a4a6b;
+}
+
+.scb-export-toggle input {
+  margin-top: 2px;
+  accent-color: #00b4d8;
+}
+
+.scb-export-toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.scb-export-toggle-label {
+  color: #c0d8ef;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.scb-export-toggle-desc {
+  color: #4a6a8a;
+  font-size: 11px;
+}
+
+.scb-export-formats {
+  display: flex;
+  gap: 8px;
+}
+
+.scb-export-format {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px;
+  background: #16293d;
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  text-align: center;
+}
+
+.scb-export-format:hover {
+  border-color: #2a4a6b;
+}
+
+.scb-export-format:has(input:checked) {
+  border-color: #00b4d8;
+  background: #0a2a4a;
+}
+
+.scb-export-format input {
+  accent-color: #00b4d8;
+}
+
+.scb-export-format span:nth-child(2) {
+  color: #c0d8ef;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scb-export-format-desc {
+  color: #4a6a8a;
+  font-size: 10px;
+}
+
+.scb-export-note {
+  color: #4a6a8a;
+  font-size: 11px;
+  margin-top: 12px;
+  text-align: center;
+  font-style: italic;
+}
+
+.scb-export-link {
+  color: #00b4d8;
+  text-decoration: none;
+}
+
+.scb-export-link:hover {
+  color: #48cae4;
+  text-decoration: underline;
+}
+
+.scb-export-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #1e3a5f;
+}
+
+/* ── Data Collection Progress ── */
+
+.scb-collect-progress {
+  padding: 4px 0;
+}
+
+.scb-collect-title {
+  color: #c0d8ef;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.scb-collect-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scb-collect-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #16293d;
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.scb-collect-step.scb-step-collecting {
+  border-color: #00b4d8;
+  background: #0a2a4a;
+}
+
+.scb-collect-step.scb-step-done {
+  border-color: #2d6a4f;
+  background: #0d2818;
+}
+
+.scb-collect-step.scb-step-error {
+  border-color: #6a2a2a;
+  background: #2a0d0d;
+}
+
+.scb-collect-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.scb-collect-label {
+  color: #c0d8ef;
+  font-size: 13px;
+  flex: 1;
+}
+
+.scb-collect-detail {
+  color: #6a8aaa;
+  font-size: 11px;
+  text-align: right;
+}
+
+.scb-step-collecting .scb-collect-detail {
+  color: #00b4d8;
+}
+
+.scb-step-done .scb-collect-detail {
+  color: #52b788;
+}
+
+.scb-step-error .scb-collect-detail {
+  color: #f87171;
+}
+
+/* ── Loading Indicator ── */
+
+.scb-loading {
+  color: #4a6a8a;
+  font-size: 13px;
+  padding: 8px 0 0;
+  text-align: center;
 }

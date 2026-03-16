@@ -4,21 +4,30 @@ export const API_BASE =
     ? "http://localhost:8787"
     : "https://scbridge.app";
 
-/** RSI API base URL */
+/** RSI website base URL */
 export const RSI_BASE = "https://robertsspaceindustries.com";
 
-/** RSI API endpoints (all POST) */
+/**
+ * RSI API endpoints that actually work (all POST, require X-Rsi-Token header).
+ *
+ * Note: There is NO JSON API for pledges — /api/account/pledges returns 500.
+ * Pledge data is scraped from the HTML pages at /account/pledges?page=N.
+ */
 export const RSI_API = {
-  /** List pledges (paginated) */
-  pledges: "/api/account/pledges",
-  /** List buy-back pledges (paginated) */
+  /** Buy-back pledges (paginated) */
   buybackPledges: "/api/account/buyBackPledges",
-  /** Upgrade log for a specific pledge */
+  /** Upgrade log for a specific pledge — returns HTML */
   upgradeLog: "/api/account/upgradeLog",
-  /** Account info */
-  accountInfo: "/api/account/v2/setAuthToken",
-  /** Org info */
-  orgInfo: "/api/account/getOrgInfo",
+  /** JWT token for authenticated contexts */
+  setAuthToken: "/api/account/v2/setAuthToken",
+  /** Org info (public org search — not user memberships) */
+  orgSearch: "/api/orgs/getOrgs",
+  /** Pledge event log — returns HTML snippets */
+  pledgeLog: "/api/account/pledgeLog",
+  /** Credit transaction log */
+  creditLog: "/api/account/creditLog",
+  /** Badge list */
+  badges: "/api/account/badge/getBadges",
 } as const;
 
 /** Delay between RSI API requests (ms) — be respectful */

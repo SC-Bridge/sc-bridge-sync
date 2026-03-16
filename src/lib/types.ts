@@ -1,29 +1,63 @@
-/** Types for RSI API responses and sync payloads */
+/** Types for RSI data and sync payloads */
 
-/** A pledge container from RSI's /api/account/pledges */
+// ── Pledge Data (scraped from RSI HTML) ──
+
+/** A pledge container parsed from RSI's hangar page */
 export interface RsiPledge {
   id: number;
   name: string;
+  /** Display value e.g. "$220.00 USD" or "¤5,000 UEC" */
   value: string;
-  configuration_value: string;
+  /** Parsed USD value (0 for non-USD pledges) */
+  valueCents: number;
+  /** Original pre-upgrade value e.g. "$0.00 USD" */
+  configurationValue: string;
+  /** Currency label: "Store Credit", "UEC", "TyCustomer_ledger_-en" */
+  currency: string;
+  /** Human-readable date e.g. "February 22, 2018" */
   date: string;
-  is_upgraded: boolean;
-  is_reclaimable: boolean;
-  is_giftable: boolean;
+  isUpgraded: boolean;
+  isReclaimable: boolean;
+  isGiftable: boolean;
+  /** Whether an upgrade log exists for this pledge */
+  hasUpgradeLog: boolean;
   availability: string;
   items: RsiPledgeItem[];
+  /** Ships that can be named within this pledge */
+  nameableShips: NamedShip[] | null;
+  /** Map of membership_id → custom name */
+  nameReservations: Record<string, string> | null;
+  /** CCU from/to data (upgrade pledges only) */
+  upgradeData: RsiUpgradeData | null;
+  /** Pledge-level thumbnail image (from the row's background-image) */
+  pledgeImage: string | null;
+  // Derived fields
+  hasLti: boolean;
+  isWarbond: boolean;
+  isReward: boolean;
 }
 
 /** An item within an RSI pledge */
 export interface RsiPledgeItem {
   title: string;
-  kind: string;
-  manufacturer_code?: string;
-  manufacturer_name?: string;
+  kind: string | null;
+  manufacturer?: string;
+  manufacturerCode?: string;
   image?: string;
-  custom_name?: string;
+  customName?: string;
   serial?: string;
-  is_nameable?: boolean;
+  /** Whether the item slot is nameable */
+  isNameable?: boolean;
+}
+
+/** CCU/upgrade data embedded in upgrade pledges */
+export interface RsiUpgradeData {
+  id: number;
+  name: string;
+  upgrade_type: string;
+  upgrade_value: string | null;
+  match_items: Array<{ id: number; name: string }>;
+  target_items: Array<{ id: number; name: string }>;
 }
 
 /** A buy-back pledge — melted and available for reclaim */
@@ -49,6 +83,15 @@ export interface RsiUpgrade {
   new_value: string;
 }
 
+/** A custom-named ship */
+export interface NamedShip {
+  membership_id: number;
+  default_name: string;
+  custom_name: string;
+}
+
+// ── Account Data ──
+
 /** Account metadata from RSI */
 export interface RsiAccountInfo {
   nickname: string;
@@ -61,15 +104,43 @@ export interface RsiAccountInfo {
   concierge_progress?: number;
   subscriber_type?: string;
   subscriber_frequency?: string;
+  /** Balances parsed from creditsData array */
   store_credit_cents?: number;
   uec_balance?: number;
   rec_balance?: number;
-  org_name?: string;
-  org_sid?: string;
-  badges?: Record<string, string>;
+  /** Primary org from dashboard */
+  org?: RsiOrgInfo;
+  /** All orgs from /api/account/getOrgInfo */
+  orgs?: RsiOrgInfo[];
+  /** Featured/chosen badges displayed on profile */
+  featured_badges?: RsiBadgeDisplay[];
+  /** All earned badges (id → name) from /api/account/badge/getBadges */
+  all_badges?: Record<string, string>;
   referral_code?: string;
   has_game_package?: boolean;
+  is_subscriber?: boolean;
+  email?: string;
 }
+
+/** An RSI org membership */
+export interface RsiOrgInfo {
+  name: string;
+  sid: string;
+  image?: string;
+  url?: string;
+  rank?: string;
+  is_primary?: boolean;
+  members?: string;
+}
+
+/** A badge displayed on the user's profile */
+export interface RsiBadgeDisplay {
+  title: string;
+  image_url: string;
+  org_url?: string;
+}
+
+// ── Sync Payload ──
 
 /** The full sync payload sent to SC Bridge API */
 export interface SyncPayload {
@@ -88,18 +159,14 @@ export interface SyncPayload {
   };
 }
 
-/** A custom-named ship */
-export interface NamedShip {
-  membership_id: number;
-  default_name: string;
-  custom_name: string;
-}
+// ── Extension Messages ──
 
-/** Messages between popup ↔ background service worker */
+/** Messages between content script / popup ↔ background service worker */
 export type ExtensionMessage =
   | { type: "GET_STATUS" }
   | { type: "START_SYNC" }
   | { type: "CANCEL_SYNC" }
+  | { type: "GET_RSI_TOKEN" }
   | { type: "LOGIN"; token: string }
   | { type: "LOGOUT" }
   | {
@@ -116,5 +183,7 @@ export type ExtensionMessage =
   | { type: "SYNC_ERROR"; error: string }
   | { type: "GET_LAST_PAYLOAD" }
   | { type: "LAST_PAYLOAD"; payload: SyncPayload | null }
-  | { type: "FETCH_ALL_PLEDGE_VALUES" }
-  | { type: "ALL_PLEDGE_VALUES"; totalSpend: number; pledgeCount: number };
+  | { type: "BRIDGE_COLLECT_HANGAR" }
+  | { type: "COLLECT_ALL_DATA" }
+  | { type: "COLLECT_RESULT"; payload: SyncPayload }
+  | { type: "COLLECT_ERROR"; error: string };
