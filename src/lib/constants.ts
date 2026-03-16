@@ -1,8 +1,49 @@
-/** SC Bridge API base URL */
-export const API_BASE =
+/** Default SC Bridge API base URL (compile-time) */
+const DEFAULT_API_BASE =
   import.meta.env.MODE === "development"
     ? "http://localhost:8787"
-    : "https://scbridge.app";
+    : import.meta.env.VITE_API_BASE || "https://scbridge.app";
+
+/** Environment configs for dev tools switcher */
+export const ENVIRONMENTS = {
+  production: { label: "Production", url: "https://scbridge.app" },
+  staging: { label: "Staging", url: "https://staging.scbridge.app" },
+} as const;
+
+export type EnvKey = keyof typeof ENVIRONMENTS;
+
+/** Storage key for environment override */
+const ENV_OVERRIDE_KEY = "dev_env_override";
+
+/** Get the active API base URL (checks for dev tools override) */
+export async function getApiBase(): Promise<string> {
+  try {
+    const result = await browser.storage.local.get(ENV_OVERRIDE_KEY);
+    const override = result[ENV_OVERRIDE_KEY] as EnvKey | undefined;
+    if (override && ENVIRONMENTS[override]) {
+      return ENVIRONMENTS[override].url;
+    }
+  } catch {
+    // storage not available (e.g. during build) — use default
+  }
+  return DEFAULT_API_BASE;
+}
+
+/** Get the active API base URL synchronously (for initial render — may be stale) */
+export function getApiBaseSync(): string {
+  return DEFAULT_API_BASE;
+}
+
+/** Set the environment override */
+export async function setEnvOverride(env: EnvKey): Promise<void> {
+  await browser.storage.local.set({ [ENV_OVERRIDE_KEY]: env });
+}
+
+/** Get the current environment override (or null for default) */
+export async function getEnvOverride(): Promise<EnvKey | null> {
+  const result = await browser.storage.local.get(ENV_OVERRIDE_KEY);
+  return (result[ENV_OVERRIDE_KEY] as EnvKey) ?? null;
+}
 
 /** RSI website base URL */
 export const RSI_BASE = "https://robertsspaceindustries.com";

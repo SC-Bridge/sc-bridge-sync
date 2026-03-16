@@ -8,55 +8,8 @@
   </head>
   <body>
     <div id="app">
-      <!-- Onboarding / Consent -->
-      <div id="consent-screen" class="screen hidden">
-        <h2>SC Bridge Sync</h2>
-        <p>
-          This extension reads your RSI hangar data and sends it to
-          <strong>scbridge.app</strong> to keep your fleet in sync.
-        </p>
-
-        <h3>Choose what to sync</h3>
-        <div id="category-toggles" class="category-list">
-          <!-- Populated by main.ts from SYNC_CATEGORIES -->
-        </div>
-
-        <div class="consent-footer">
-          <p class="fine-print">
-            Your RSI session token is used only for API calls and is never
-            stored. We do not make purchases, modify your hangar, or share your
-            data with third parties.
-          </p>
-          <p class="fine-print">
-            By continuing, you agree to our
-            <a href="https://scbridge.app/privacy/extension" target="_blank"
-              >Privacy Policy</a
-            >.
-          </p>
-          <button id="consent-btn" class="btn btn-primary">
-            Continue
-          </button>
-        </div>
-      </div>
-
-      <!-- Login -->
-      <div id="login-screen" class="screen hidden">
-        <h2>Connect to SC Bridge</h2>
-        <p>Log into your SC Bridge account to link the extension.</p>
-        <div class="form-group">
-          <label for="email-input">Email</label>
-          <input type="email" id="email-input" placeholder="you@example.com" />
-        </div>
-        <div class="form-group">
-          <label for="password-input">Password</label>
-          <input type="password" id="password-input" />
-        </div>
-        <button id="login-btn" class="btn btn-primary">Log in</button>
-        <p id="login-error" class="error hidden"></p>
-      </div>
-
-      <!-- Main / Sync -->
-      <div id="main-screen" class="screen hidden">
+      <!-- Main -->
+      <div id="main-screen" class="screen">
         <h2>SC Bridge Sync</h2>
         <div id="status-section">
           <div class="status-row">
@@ -73,74 +26,48 @@
           <p>Last sync: <span id="last-sync-time"></span></p>
         </div>
 
-        <div id="progress-section" class="hidden">
-          <div class="progress-bar">
-            <div id="progress-fill" class="progress-fill"></div>
-          </div>
-          <p id="progress-text"></p>
+        <div class="sync-cta">
+          <p>To sync your hangar, initiate the sync from your Settings page.</p>
+          <a id="settings-link" href="https://scbridge.app/settings" target="_blank" class="btn btn-primary">
+            Open Settings
+          </a>
         </div>
 
-        <div id="error-section" class="hidden">
-          <p id="error-text" class="error"></p>
-        </div>
-
-        <!-- Sync preferences (collapsible) -->
-        <details id="preferences-section" class="preferences">
-          <summary>Sync preferences</summary>
-          <div id="main-category-toggles" class="category-list compact">
-            <!-- Populated by main.ts -->
-          </div>
-        </details>
-
-        <div class="actions">
-          <button id="sync-btn" class="btn btn-primary" disabled>
-            Sync Now
-          </button>
-          <div class="btn-row">
-            <button id="export-nav-btn" class="btn btn-secondary" disabled>
-              Export
-            </button>
-            <button id="logout-btn" class="btn btn-secondary">Disconnect</button>
-          </div>
-        </div>
+        <div id="env-badge" class="env-badge hidden"></div>
       </div>
-      <!-- Export -->
-      <div id="export-screen" class="screen hidden">
+
+      <!-- Dev Tools (Ctrl+Shift+D) -->
+      <div id="devtools-screen" class="screen hidden">
         <div class="screen-header">
-          <button id="export-back-btn" class="btn-icon" title="Back">&larr;</button>
-          <h2>Export Hangar Data</h2>
+          <button id="devtools-back-btn" class="btn-icon" title="Back">&larr;</button>
+          <h2>Dev Tools</h2>
         </div>
 
-        <p>Choose what to include and the file format.</p>
-
-        <h3>Data to export</h3>
-        <div id="export-category-toggles" class="category-list">
-          <!-- Populated by main.ts -->
+        <div class="form-group">
+          <label>Environment</label>
+          <div class="env-picker">
+            <label class="format-option">
+              <input type="radio" name="dev-env" value="production" />
+              <span class="format-info">
+                <span class="format-label">Production</span>
+                <span class="format-desc">scbridge.app</span>
+              </span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="dev-env" value="staging" />
+              <span class="format-info">
+                <span class="format-label">Staging</span>
+                <span class="format-desc">staging.scbridge.app</span>
+              </span>
+            </label>
+          </div>
         </div>
 
-        <h3>Format</h3>
-        <div class="format-picker">
-          <label class="format-option">
-            <input type="radio" name="export-format" value="json" checked />
-            <span class="format-info">
-              <span class="format-label">JSON</span>
-              <span class="format-desc">Full fidelity, nested structure</span>
-            </span>
-          </label>
-          <label class="format-option">
-            <input type="radio" name="export-format" value="csv" />
-            <span class="format-info">
-              <span class="format-label">CSV</span>
-              <span class="format-desc">Spreadsheet-friendly, one row per item</span>
-            </span>
-          </label>
-        </div>
-
-        <div id="export-error" class="error hidden"></div>
+        <p id="devtools-current" class="fine-print"></p>
 
         <div class="actions">
-          <button id="export-btn" class="btn btn-primary" disabled>
-            Export
+          <button id="devtools-apply-btn" class="btn btn-primary">
+            Apply & Recheck
           </button>
         </div>
       </div>
