@@ -1151,15 +1151,9 @@ async function collectBuyBackPledges(
           if (label === "Contained") containedText = val;
         }
 
-        // Parse contained items (e.g. "Fury and 4 items" or "Aurora MR")
+        // "Contained" shows the upgraded state, not the original pledge — skip it.
+        // The pledge name IS the meaningful data for buyback.
         const items: RsiPledgeItem[] = [];
-        if (containedText) {
-          // Split on " and " to get the primary item name
-          const mainItem = containedText.split(" and ")[0].trim();
-          if (mainItem) {
-            items.push({ title: mainItem, kind: null });
-          }
-        }
 
         // Reclaimable if the buyback button link exists — the .unavailable div is always
         // in the DOM but hidden via display:none when the pledge can be bought back
