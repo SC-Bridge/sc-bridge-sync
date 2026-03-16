@@ -1161,9 +1161,9 @@ async function collectBuyBackPledges(
           }
         }
 
-        // Whether it's reclaimable: has a buyback button without "unavailable" hiding it
-        const unavailable = el.querySelector(".unavailable");
-        const isCreditReclaimable = !!buybackLink && !unavailable;
+        // Reclaimable if the buyback button link exists — the .unavailable div is always
+        // in the DOM but hidden via display:none when the pledge can be bought back
+        const isCreditReclaimable = !!buybackLink;
 
         buybacks.push({
           id,
