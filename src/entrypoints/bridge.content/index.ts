@@ -6,7 +6,7 @@
 const ALLOWED_ORIGINS = [
   "https://scbridge.app",
   "https://staging.scbridge.app",
-  "http://localhost:5173",
+  ...(import.meta.env.MODE === "development" ? ["http://localhost:5173"] : []),
 ];
 
 const MAX_RETRIES = 3;
@@ -37,7 +37,7 @@ export default defineContentScript({
   matches: [
     "https://scbridge.app/*",
     "https://staging.scbridge.app/*",
-    "http://localhost:5173/*",
+    // localhost is injected via wxt.config.ts content_scripts override in dev mode only
   ],
 
   main() {
