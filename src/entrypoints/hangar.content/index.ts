@@ -465,8 +465,10 @@ async function loadAllPages() {
     const probePages = Array.from({ length: PROBE_BATCH }, (_, i) => i + 1);
     updateLoadingState(true, `Loading pages 1–${PROBE_BATCH}...`);
 
-    const probeResults = await Promise.all(
-      probePages.map((p) => fetchPageNodes(locale, p)),
+    const probeResults = await concurrentMap(
+      probePages,
+      (p) => fetchPageNodes(locale, p),
+      { concurrency: 5 },
     );
 
     let lastFullPage = 0;
@@ -490,8 +492,10 @@ async function loadAllPages() {
       );
       updateLoadingState(true, `Loading remaining pages...`);
 
-      const remainResults = await Promise.all(
-        remaining.map((p) => fetchPageNodes(locale, p)),
+      const remainResults = await concurrentMap(
+        remaining,
+        (p) => fetchPageNodes(locale, p),
+        { concurrency: 5 },
       );
 
       for (const entries of remainResults) {
@@ -798,6 +802,27 @@ async function rsiPostFromContent<T>(path: string, body: Record<string, unknown>
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Run async tasks with bounded concurrency + delay between launches. */
+async function concurrentMap<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  { concurrency = 5, delayMs = RSI_REQUEST_DELAY_MS }: { concurrency?: number; delayMs?: number } = {},
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      if (i > 0) await delay(delayMs);
+      results[i] = await fn(items[i]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
 }
 
 // ── Background-Triggered Collection (Bridge Sync Flow) ──
