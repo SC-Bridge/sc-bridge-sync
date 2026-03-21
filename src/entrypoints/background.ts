@@ -177,21 +177,36 @@ export default defineBackground(() => {
     });
   }
 
+  /** Check if user has an active SC Bridge session (via cookies) */
+  async function isScBridgeLoggedIn(): Promise<boolean> {
+    try {
+      const apiBase = await getApiBase();
+      const res = await fetch(`${apiBase}/api/auth/get-session`, {
+        credentials: "include",
+      });
+      if (!res.ok) return false;
+      const data = await res.json() as { session?: unknown };
+      return !!data?.session;
+    } catch {
+      return false;
+    }
+  }
+
   async function handleSyncSpectrumFriends(): Promise<
     { type: "SPECTRUM_FRIENDS_RESULT"; count: number; selfHandle: string } |
     { type: "SPECTRUM_FRIENDS_ERROR"; error: string }
   > {
     try {
       // Check prerequisites
-      const [rsiOk, token] = await Promise.all([
+      const [rsiOk, scBridgeOk] = await Promise.all([
         isRsiLoggedIn(),
-        getAuthToken(),
+        isScBridgeLoggedIn(),
       ]);
 
       if (!rsiOk) {
         return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into RSI" };
       }
-      if (!token) {
+      if (!scBridgeOk) {
         return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into SC Bridge" };
       }
 
@@ -202,14 +217,12 @@ export default defineBackground(() => {
         return { type: "SPECTRUM_FRIENDS_RESULT", count: 0, selfHandle };
       }
 
-      // Upload to SC Bridge
+      // Upload to SC Bridge (using session cookies via credentials: "include")
       const apiBase = await getApiBase();
       const response = await fetch(`${apiBase}/api/companion/sync/friends`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ friends }),
       });
 
@@ -324,11 +337,8 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== FRIENDS_ALARM) return;
 
-    const [token, rsiOk] = await Promise.all([
-      getAuthToken(),
-      isRsiLoggedIn(),
-    ]);
-    if (!token || !rsiOk) return;
+    const rsiOk = await isRsiLoggedIn();
+    if (!rsiOk) return;
 
     try {
       const result = await handleSyncSpectrumFriends();
