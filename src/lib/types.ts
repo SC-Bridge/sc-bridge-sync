@@ -164,8 +164,6 @@ export interface SyncPayload {
 /** Messages between content script / popup ↔ background service worker */
 export type ExtensionMessage =
   | { type: "GET_STATUS" }
-  | { type: "START_SYNC" }
-  | { type: "CANCEL_SYNC" }
   | { type: "GET_RSI_TOKEN" }
   | { type: "LOGIN"; token: string }
   | { type: "LOGOUT" }
@@ -178,9 +176,6 @@ export type ExtensionMessage =
       lastSync: string | null;
       error: string | null;
     }
-  | { type: "SYNC_PROGRESS"; phase: string; detail: string; percent: number }
-  | { type: "SYNC_COMPLETE"; timestamp: string }
-  | { type: "SYNC_ERROR"; error: string }
   | { type: "GET_LAST_PAYLOAD" }
   | { type: "LAST_PAYLOAD"; payload: SyncPayload | null }
   | { type: "BRIDGE_COLLECT_HANGAR" }

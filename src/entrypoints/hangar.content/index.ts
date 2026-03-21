@@ -1636,22 +1636,7 @@ function downloadFile(content: string, filename: string, mime: string) {
 
 // ── Sync ──
 
-async function triggerSync() {
-  const btn = document.getElementById("scb-sync") as HTMLButtonElement | null;
-  if (!btn) return;
-
-  btn.disabled = true;
-  btn.textContent = "Syncing...";
-
-  try {
-    const response = await browser.runtime.sendMessage({ type: "START_SYNC" });
-    btn.textContent = response?.ok ? "Sync Started!" : (response?.error ?? "Sync Failed");
-  } catch {
-    btn.textContent = "Sync Failed";
-  }
-
-  setTimeout(() => {
-    btn.textContent = "Sync to SC Bridge";
-    btn.disabled = false;
-  }, 3000);
+function triggerSync() {
+  // Redirect to the SC Bridge import page where the actual sync happens
+  window.open("https://scbridge.app/sync-import", "_blank");
 }
