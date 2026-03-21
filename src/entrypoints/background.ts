@@ -6,12 +6,13 @@
  */
 
 import { isRsiLoggedIn, getRsiToken } from "@/lib/rsi-client";
-import { getAuthToken, getLastSync, hasConsent, isCategoryEnabled } from "@/lib/storage";
+import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
 import { getApiBase } from "@/lib/constants";
 import { fetchSpectrumFriends } from "@/lib/spectrum";
 import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 
 const LAST_PAYLOAD_KEY = "last_sync_payload";
+const FRIENDS_ALARM = "spectrum-friends-sync";
 
 export default defineBackground(() => {
   /** Current sync state (in-memory, backed by storage checkpoints) */
@@ -182,10 +183,9 @@ export default defineBackground(() => {
   > {
     try {
       // Check prerequisites
-      const [rsiOk, token, enabled] = await Promise.all([
+      const [rsiOk, token] = await Promise.all([
         isRsiLoggedIn(),
         getAuthToken(),
-        isCategoryEnabled("spectrumFriends"),
       ]);
 
       if (!rsiOk) {
@@ -193,9 +193,6 @@ export default defineBackground(() => {
       }
       if (!token) {
         return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into SC Bridge" };
-      }
-      if (!enabled) {
-        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Spectrum Friends sync is disabled in preferences" };
       }
 
       // Fetch from Spectrum
@@ -317,4 +314,29 @@ export default defineBackground(() => {
       percent,
     });
   }
+
+  // ── Spectrum Friends Auto-Sync (60s alarm) ──
+
+  // Syncs friends whenever logged into both RSI and SC Bridge.
+  // periodInMinutes minimum is 1 for MV3 — runs every 60s.
+  browser.alarms.create(FRIENDS_ALARM, { periodInMinutes: 1 });
+
+  browser.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== FRIENDS_ALARM) return;
+
+    const [token, rsiOk] = await Promise.all([
+      getAuthToken(),
+      isRsiLoggedIn(),
+    ]);
+    if (!token || !rsiOk) return;
+
+    try {
+      const result = await handleSyncSpectrumFriends();
+      if (result.type === "SPECTRUM_FRIENDS_ERROR") {
+        console.warn("[friends-sync]", result.error);
+      }
+    } catch (err) {
+      console.warn("[friends-sync] alarm handler error:", err);
+    }
+  });
 });

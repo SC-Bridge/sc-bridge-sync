@@ -6,7 +6,7 @@ export default defineConfig({
     name: "SC Bridge Sync",
     description:
       "Syncs your Star Citizen hangar data from RSI to SC Bridge. Ships, insurance, pledges, CCU chains, and custom ship names.",
-    permissions: ["cookies", "storage", "tabs"],
+    permissions: ["cookies", "storage", "tabs", "alarms"],
     host_permissions: [
       "https://robertsspaceindustries.com/*",
       "https://*.robertsspaceindustries.com/*",
