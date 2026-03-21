@@ -6,7 +6,9 @@
  */
 
 import { isRsiLoggedIn, getRsiToken } from "@/lib/rsi-client";
-import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
+import { getAuthToken, getLastSync, hasConsent, isCategoryEnabled } from "@/lib/storage";
+import { getApiBase } from "@/lib/constants";
+import { fetchSpectrumFriends } from "@/lib/spectrum";
 import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 
 const LAST_PAYLOAD_KEY = "last_sync_payload";
@@ -46,6 +48,11 @@ export default defineBackground(() => {
 
       if (message.type === "BRIDGE_COLLECT_HANGAR") {
         handleBridgeCollect().then(sendResponse);
+        return true;
+      }
+
+      if (message.type === "SYNC_SPECTRUM_FRIENDS") {
+        handleSyncSpectrumFriends().then(sendResponse);
         return true;
       }
     },
@@ -167,6 +174,63 @@ export default defineBackground(() => {
 
       browser.tabs.onUpdated.addListener(listener);
     });
+  }
+
+  async function handleSyncSpectrumFriends(): Promise<
+    { type: "SPECTRUM_FRIENDS_RESULT"; count: number; selfHandle: string } |
+    { type: "SPECTRUM_FRIENDS_ERROR"; error: string }
+  > {
+    try {
+      // Check prerequisites
+      const [rsiOk, token, enabled] = await Promise.all([
+        isRsiLoggedIn(),
+        getAuthToken(),
+        isCategoryEnabled("spectrumFriends"),
+      ]);
+
+      if (!rsiOk) {
+        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into RSI" };
+      }
+      if (!token) {
+        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into SC Bridge" };
+      }
+      if (!enabled) {
+        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Spectrum Friends sync is disabled in preferences" };
+      }
+
+      // Fetch from Spectrum
+      const { friends, selfHandle } = await fetchSpectrumFriends();
+
+      if (friends.length === 0) {
+        return { type: "SPECTRUM_FRIENDS_RESULT", count: 0, selfHandle };
+      }
+
+      // Upload to SC Bridge
+      const apiBase = await getApiBase();
+      const response = await fetch(`${apiBase}/api/companion/sync/friends`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ friends }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        return {
+          type: "SPECTRUM_FRIENDS_ERROR",
+          error: `SC Bridge API error: ${response.status} — ${text.slice(0, 200)}`,
+        };
+      }
+
+      return { type: "SPECTRUM_FRIENDS_RESULT", count: friends.length, selfHandle };
+    } catch (err) {
+      return {
+        type: "SPECTRUM_FRIENDS_ERROR",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async function handleGetStatus() {

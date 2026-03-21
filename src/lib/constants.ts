@@ -69,6 +69,8 @@ export const RSI_API = {
   creditLog: "/api/account/creditLog",
   /** Badge list */
   badges: "/api/account/badge/getBadges",
+  /** Spectrum session bootstrap — returns friends, communities, etc. */
+  spectrumIdentify: "/api/spectrum/auth/identify",
 } as const;
 
 /** Delay between RSI API requests (ms) — be respectful */
@@ -122,6 +124,12 @@ export const SYNC_CATEGORIES = {
     label: "Custom Ship Names",
     description: "Your named ships (e.g. Jean-Luc, James Holden)",
     default: true,
+  },
+  spectrumFriends: {
+    key: "spectrumFriends" as const,
+    label: "Spectrum Friends",
+    description: "Friends list and online status from Spectrum chat",
+    default: false,
   },
 } as const;
 

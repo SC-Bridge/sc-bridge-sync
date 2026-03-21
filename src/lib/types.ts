@@ -186,4 +186,7 @@ export type ExtensionMessage =
   | { type: "BRIDGE_COLLECT_HANGAR" }
   | { type: "COLLECT_ALL_DATA" }
   | { type: "COLLECT_RESULT"; payload: SyncPayload }
-  | { type: "COLLECT_ERROR"; error: string };
+  | { type: "COLLECT_ERROR"; error: string }
+  | { type: "SYNC_SPECTRUM_FRIENDS" }
+  | { type: "SPECTRUM_FRIENDS_RESULT"; count: number; selfHandle: string }
+  | { type: "SPECTRUM_FRIENDS_ERROR"; error: string };
