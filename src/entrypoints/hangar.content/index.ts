@@ -878,7 +878,7 @@ async function concurrentMap<T, R>(
 
 async function handleCollectAll(): Promise<SyncPayload> {
   // Wait for initial pagination to finish (loading becomes false)
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 120_000; // 2 min — large hangars (600+ pledges) need time
   while (loading) {
     if (Date.now() > deadline) {
       throw new Error("Timed out waiting for hangar data to load");
