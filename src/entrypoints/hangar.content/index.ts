@@ -11,6 +11,7 @@
 import "./style.css";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
 import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS } from "@/lib/constants";
+import { csvEscape, downloadFile } from "@/lib/export";
 
 // ── Filter Types ──
 
@@ -61,6 +62,18 @@ let excludeFilters = new Set<FilterKey>();
 let searchQuery = "";
 let loading = true;
 let nativeList: HTMLElement | null = null;
+
+function getLocale(): string {
+  const match = window.location.pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//i);
+  return match ? match[1] : "en";
+}
+
+/** Remove RSI's native pagination controls wherever they appear */
+function hidePager() {
+  document.querySelectorAll<HTMLElement>(".js-pager, .pager-container, .pagination").forEach((el) => {
+    el.remove();
+  });
+}
 
 // ── Content Script Definition ──
 
@@ -116,6 +129,15 @@ function tryInit(): boolean {
   collectNodesFromContainer(nativeList);
 
   injectToolbar();
+
+  // Hide RSI's native pagination — prevents page navigation during load.
+  // The pager may not exist yet (RSI renders it after the list), so also
+  // watch for it with a MutationObserver.
+  hidePager();
+  const pagerObserver = new MutationObserver(() => { hidePager(); });
+  pagerObserver.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => pagerObserver.disconnect(), 30_000);
+
   loadAllPages();
   return true;
 }
@@ -254,24 +276,38 @@ function showImagePopup(thumbnailUrl: string, title: string) {
   const overlay = document.createElement("div");
   overlay.id = "scb-image-popup";
   overlay.className = "scb-image-popup";
-  overlay.innerHTML = `
-    <div class="scb-popup-backdrop"></div>
-    <div class="scb-popup-content">
-      <div class="scb-popup-header">
-        <span class="scb-popup-title">${title.replace(/</g, "&lt;")}</span>
-        <button class="scb-popup-close">&times;</button>
-      </div>
-      <div class="scb-popup-img-wrap">
-        <img class="scb-popup-img scb-popup-thumb" src="${thumbnailUrl}" alt="${title.replace(/"/g, "&quot;")}" />
-        <div class="scb-popup-loading">Loading full image...</div>
-      </div>
-    </div>
-  `;
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "scb-popup-backdrop";
+
+  const content = document.createElement("div");
+  content.className = "scb-popup-content";
+
+  const header = document.createElement("div");
+  header.className = "scb-popup-header";
+  const titleSpan = document.createElement("span");
+  titleSpan.className = "scb-popup-title";
+  titleSpan.textContent = title;
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "scb-popup-close";
+  closeBtn.innerHTML = "&times;";
+  header.append(titleSpan, closeBtn);
+
+  const imgWrap = document.createElement("div");
+  imgWrap.className = "scb-popup-img-wrap";
+  const thumbImg = document.createElement("img");
+  thumbImg.className = "scb-popup-img scb-popup-thumb";
+  thumbImg.src = thumbnailUrl;
+  thumbImg.alt = title;
+  const loadingEl = document.createElement("div");
+  loadingEl.className = "scb-popup-loading";
+  loadingEl.textContent = "Loading full image...";
+  imgWrap.append(thumbImg, loadingEl);
+
+  content.append(header, imgWrap);
+  overlay.append(backdrop, content);
 
   // Show thumbnail instantly, swap to full-res when loaded
-  const imgWrap = overlay.querySelector(".scb-popup-img-wrap")!;
-  const thumbImg = overlay.querySelector(".scb-popup-thumb") as HTMLImageElement;
-  const loadingEl = overlay.querySelector(".scb-popup-loading") as HTMLElement;
   const fullImg = new Image();
   fullImg.className = "scb-popup-img";
   fullImg.alt = title;
@@ -288,8 +324,8 @@ function showImagePopup(thumbnailUrl: string, title: string) {
   document.body.appendChild(overlay);
 
   // Close on backdrop click, close button, or Escape
-  overlay.querySelector(".scb-popup-backdrop")?.addEventListener("click", () => overlay.remove());
-  overlay.querySelector(".scb-popup-close")?.addEventListener("click", () => overlay.remove());
+  backdrop.addEventListener("click", () => overlay.remove());
+  closeBtn.addEventListener("click", () => overlay.remove());
   document.addEventListener("keydown", function handler(e) {
     if (e.key === "Escape") {
       overlay.remove();
@@ -454,8 +490,7 @@ async function loadAllPages() {
   loading = true;
   updateLoadingState(true, "Loading all pledges...");
 
-  const localeMatch = window.location.pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//i);
-  const locale = localeMatch ? localeMatch[1] : "en";
+  const locale = getLocale();
   const t0 = performance.now();
 
   // Track which IDs we already have from page 1
@@ -495,7 +530,7 @@ async function loadAllPages() {
       const remainResults = await concurrentMap(
         remaining,
         (p) => fetchPageNodes(locale, p),
-        { concurrency: 5 },
+        { concurrency: 5, shouldStop: (entries) => entries.length === 0 },
       );
 
       for (const entries of remainResults) {
@@ -517,10 +552,7 @@ async function loadAllPages() {
 
   loading = false;
   updateLoadingState(false);
-
-  // Hide RSI's native pagination — we show all items
-  const pager = document.querySelector(".pager-container, .pagination") as HTMLElement | null;
-  if (pager) pager.style.display = "none";
+  hidePager();
 
   applyFilters();
 }
@@ -535,7 +567,7 @@ async function fetchPageNodes(locale: string, page: number): Promise<PledgeEntry
   const doc = parser.parseFromString(html, "text/html");
   const rows = doc.querySelectorAll(".list-items > li");
 
-  if (rows.length === 0 || doc.querySelector(".empy-list")) return [];
+  if (rows.length === 0 || doc.querySelector(".empy-list, .empty-list")) return [];
 
   const entries: PledgeEntry[] = [];
   for (const li of rows) {
@@ -808,16 +840,33 @@ function delay(ms: number): Promise<void> {
 async function concurrentMap<T, R>(
   items: T[],
   fn: (item: T) => Promise<R>,
-  { concurrency = 5, delayMs = RSI_REQUEST_DELAY_MS }: { concurrency?: number; delayMs?: number } = {},
+  {
+    concurrency = 5,
+    delayMs = RSI_REQUEST_DELAY_MS,
+    shouldStop,
+  }: {
+    concurrency?: number;
+    delayMs?: number;
+    shouldStop?: (result: R, index: number) => boolean;
+  } = {},
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let idx = 0;
+  let stopped = false;
+  let lastDispatchAt = 0;
 
   async function worker() {
-    while (idx < items.length) {
+    while (!stopped && idx < items.length) {
       const i = idx++;
-      if (i > 0) await delay(delayMs);
+      // Global rate limit: wait until delayMs has passed since last dispatch
+      const now = Date.now();
+      const wait = Math.max(0, delayMs - (now - lastDispatchAt));
+      if (wait > 0) await delay(wait);
+      lastDispatchAt = Date.now();
       results[i] = await fn(items[i]);
+      if (shouldStop?.(results[i], i)) {
+        stopped = true;
+      }
     }
   }
 
@@ -920,7 +969,6 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
     }
     if (acct.enlistedSince) info.enlisted_since = acct.enlistedSince;
     if (acct.countryName) info.country = acct.countryName;
-    if (user.email) info.email = user.email;
     if (user.referral?.referralCode) info.referral_code = user.referral.referralCode;
     info.has_game_package = user.hasGamePackage ?? undefined;
     info.is_subscriber = user.isSubscriber ?? undefined;
@@ -1131,8 +1179,9 @@ async function collectBuyBackPledges(
     while (page <= maxPages) {
       onProgress(`Page ${page}...`);
 
+      const locale = getLocale();
       const response = await fetch(
-        `/account/buy-back-pledges?page=${page}&pagesize=${pageSize}`,
+        `/${locale}/account/buy-back-pledges?page=${page}&pagesize=${pageSize}`,
         { credentials: "same-origin" },
       );
       if (!response.ok) {
@@ -1240,7 +1289,9 @@ function showExportModal() {
   const isFiltered = filtered.length < inventory.length;
   const count = filtered.length;
 
-  const categoryHtml = Object.entries(SYNC_CATEGORIES).map(([key, cat]) => `
+  const categoryHtml = Object.entries(SYNC_CATEGORIES)
+    .filter(([key]) => key !== "spectrumFriends")
+    .map(([key, cat]) => `
     <label class="scb-export-toggle">
       <input type="checkbox" data-cat="${key}" checked />
       <span class="scb-export-toggle-info">
@@ -1566,7 +1617,6 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
       rows.push("field,value");
       rows.push(`nickname,${csvEscape(account.nickname)}`);
       rows.push(`displayname,${csvEscape(account.displayname)}`);
-      if (account.email) rows.push(`email,${csvEscape(account.email)}`);
       if (account.avatar_url) rows.push(`avatar_url,${csvEscape(account.avatar_url)}`);
       if (account.enlisted_since) rows.push(`enlisted_since,${csvEscape(account.enlisted_since)}`);
       if (account.country) rows.push(`country,${csvEscape(account.country)}`);
@@ -1615,23 +1665,6 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
     if (rows.length === 0) return;
     downloadFile(rows.join("\n"), `sc-bridge-hangar-${timestamp}.csv`, "text/csv");
   }
-}
-
-function csvEscape(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-function downloadFile(content: string, filename: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 // ── Sync ──

@@ -1,6 +1,6 @@
 {
   "name": "sc-bridge-sync",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Browser extension that syncs your Star Citizen hangar data from RSI to SC Bridge",
   "type": "module",
@@ -13,7 +13,8 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "zip:edge": "wxt zip -b edge",
-    "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge",
+    "zip:opera": "wxt zip -b opera",
+    "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge && npm run zip:opera",
     "typecheck": "tsc --noEmit"
   },
   "keywords": ["star-citizen", "browser-extension", "hangar", "sync"],

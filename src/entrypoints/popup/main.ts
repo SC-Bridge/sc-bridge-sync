@@ -8,22 +8,29 @@ import {
   setEnvOverride,
   type EnvKey,
 } from "@/lib/constants";
+import { isScBridgeLoggedIn } from "@/lib/sc-bridge-client";
 import { isRsiLoggedIn } from "@/lib/rsi-client";
 
 // ── Elements ──
 
-const mainScreen = document.getElementById("main-screen")!;
-const devtoolsScreen = document.getElementById("devtools-screen")!;
-const settingsLink = document.getElementById("settings-link") as HTMLAnchorElement;
-const rsiStatus = document.getElementById("rsi-status")!;
-const scbridgeStatus = document.getElementById("scbridge-status")!;
-const lastSyncSection = document.getElementById("last-sync-section")!;
-const lastSyncTime = document.getElementById("last-sync-time")!;
-const envBadge = document.getElementById("env-badge")!;
+function getEl<T extends HTMLElement = HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`[SC Bridge] Missing popup element: #${id}`);
+  return el as T;
+}
 
-const devtoolsBackBtn = document.getElementById("devtools-back-btn")!;
-const devtoolsApplyBtn = document.getElementById("devtools-apply-btn")!;
-const devtoolsCurrent = document.getElementById("devtools-current")!;
+const mainScreen = getEl("main-screen");
+const devtoolsScreen = getEl("devtools-screen");
+const settingsLink = getEl<HTMLAnchorElement>("settings-link");
+const rsiStatus = getEl("rsi-status");
+const scbridgeStatus = getEl("scbridge-status");
+const lastSyncSection = getEl("last-sync-section");
+const lastSyncTime = getEl("last-sync-time");
+const envBadge = getEl("env-badge");
+
+const devtoolsBackBtn = getEl("devtools-back-btn");
+const devtoolsApplyBtn = getEl("devtools-apply-btn");
+const devtoolsCurrent = getEl("devtools-current");
 
 // ── Screen Management ──
 
@@ -41,19 +48,6 @@ function setBadge(
 ) {
   el.textContent = text;
   el.className = `badge badge-${variant}`;
-}
-
-async function checkScBridgeSession(apiBase: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${apiBase}/api/auth/get-session`, {
-      credentials: "include",
-    });
-    if (!res.ok) return false;
-    const data = await res.json() as { session?: unknown };
-    return !!data?.session;
-  } catch {
-    return false;
-  }
 }
 
 async function refreshStatus() {
@@ -77,7 +71,7 @@ async function refreshStatus() {
 
   const [rsiOk, scbridgeOk] = await Promise.all([
     isRsiLoggedIn(),
-    checkScBridgeSession(apiBase),
+    isScBridgeLoggedIn(apiBase),
   ]);
 
   if (rsiOk) {

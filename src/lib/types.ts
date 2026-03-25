@@ -119,7 +119,6 @@ export interface RsiAccountInfo {
   referral_code?: string;
   has_game_package?: boolean;
   is_subscriber?: boolean;
-  email?: string;
 }
 
 /** An RSI org membership */
@@ -165,16 +164,12 @@ export interface SyncPayload {
 export type ExtensionMessage =
   | { type: "GET_STATUS" }
   | { type: "GET_RSI_TOKEN" }
-  | { type: "LOGIN"; token: string }
-  | { type: "LOGOUT" }
   | {
       type: "STATUS";
       rsiLoggedIn: boolean;
       scBridgeLoggedIn: boolean;
       consentGiven: boolean;
-      syncing: boolean;
       lastSync: string | null;
-      error: string | null;
     }
   | { type: "GET_LAST_PAYLOAD" }
   | { type: "LAST_PAYLOAD"; payload: SyncPayload | null }

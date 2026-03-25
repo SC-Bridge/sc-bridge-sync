@@ -220,7 +220,7 @@ function buybackRow(
 }
 
 /** Escape a CSV value — wrap in quotes if it contains commas, quotes, or newlines */
-function csvEscape(value: string): string {
+export function csvEscape(value: string): string {
   if (
     value.includes(",") ||
     value.includes('"') ||

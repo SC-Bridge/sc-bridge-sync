@@ -79,12 +79,22 @@ export default defineContentScript({
               },
               event.origin,
             );
-          } else {
+          } else if (response?.payload) {
             window.postMessage(
               {
                 type: "SCBRIDGE_SYNC_RESPONSE",
                 success: true,
-                payload: response?.payload ?? response,
+                payload: response.payload,
+                source: "sc-bridge-sync",
+              },
+              event.origin,
+            );
+          } else {
+            window.postMessage(
+              {
+                type: "SCBRIDGE_SYNC_RESPONSE",
+                success: false,
+                error: "No payload in response",
                 source: "sc-bridge-sync",
               },
               event.origin,

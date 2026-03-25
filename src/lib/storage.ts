@@ -18,22 +18,6 @@ export async function setConsent(value: boolean): Promise<void> {
   await browser.storage.local.set({ [STORAGE_KEYS.consentGiven]: value });
 }
 
-/** Get the SC Bridge auth token */
-export async function getAuthToken(): Promise<string | null> {
-  const result = await browser.storage.local.get(STORAGE_KEYS.authToken);
-  return (result[STORAGE_KEYS.authToken] as string) ?? null;
-}
-
-/** Store the SC Bridge auth token */
-export async function setAuthToken(token: string): Promise<void> {
-  await browser.storage.local.set({ [STORAGE_KEYS.authToken]: token });
-}
-
-/** Clear the SC Bridge auth token */
-export async function clearAuthToken(): Promise<void> {
-  await browser.storage.local.remove(STORAGE_KEYS.authToken);
-}
-
 /** Get the last sync timestamp */
 export async function getLastSync(): Promise<string | null> {
   const result = await browser.storage.local.get(STORAGE_KEYS.lastSync);

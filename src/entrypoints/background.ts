@@ -6,7 +6,8 @@
  */
 
 import { isRsiLoggedIn, getRsiToken } from "@/lib/rsi-client";
-import { getAuthToken, getLastSync, hasConsent } from "@/lib/storage";
+import { isScBridgeLoggedIn } from "@/lib/sc-bridge-client";
+import { getLastSync, hasConsent, isCategoryEnabled } from "@/lib/storage";
 import { getApiBase } from "@/lib/constants";
 import { fetchSpectrumFriends } from "@/lib/spectrum";
 import type { ExtensionMessage, SyncPayload } from "@/lib/types";
@@ -14,11 +15,11 @@ import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 const LAST_PAYLOAD_KEY = "last_sync_payload";
 const FRIENDS_ALARM = "spectrum-friends-sync";
 
-export default defineBackground(() => {
-  /** Current sync state (in-memory, backed by storage checkpoints) */
-  let syncing = false;
-  let lastError: string | null = null;
+function isCollectError(v: unknown): v is { type: "COLLECT_ERROR"; error: string } {
+  return typeof v === "object" && v !== null && (v as { type?: string }).type === "COLLECT_ERROR";
+}
 
+export default defineBackground(() => {
   /** Handle messages from the popup and content scripts */
   browser.runtime.onMessage.addListener(
     (message: ExtensionMessage, _sender, sendResponse) => {
@@ -96,11 +97,6 @@ export default defineBackground(() => {
         await waitForTabComplete(tabId);
       }
 
-      // Content scripts inject at document_idle — give a brief window after tab load
-      if (isNewTab) {
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-
       // Send collect command to the hangar content script.
       // If the tab was open before the extension was installed/reloaded, the content
       // script won't be injected. Detect this and reload the tab to trigger injection.
@@ -128,7 +124,7 @@ export default defineBackground(() => {
         }
       }
 
-      if (result?.type === "COLLECT_ERROR") {
+      if (isCollectError(result)) {
         return result;
       }
 
@@ -167,30 +163,16 @@ export default defineBackground(() => {
     });
   }
 
-  /** Check if user has an active SC Bridge session (via cookies) */
-  async function isScBridgeLoggedIn(): Promise<boolean> {
-    try {
-      const apiBase = await getApiBase();
-      const res = await fetch(`${apiBase}/api/auth/get-session`, {
-        credentials: "include",
-      });
-      if (!res.ok) return false;
-      const data = await res.json() as { session?: unknown };
-      return !!data?.session;
-    } catch {
-      return false;
-    }
-  }
-
   async function handleSyncSpectrumFriends(): Promise<
     { type: "SPECTRUM_FRIENDS_RESULT"; count: number; selfHandle: string } |
     { type: "SPECTRUM_FRIENDS_ERROR"; error: string }
   > {
     try {
       // Check prerequisites
+      const apiBase = await getApiBase();
       const [rsiOk, scBridgeOk] = await Promise.all([
         isRsiLoggedIn(),
-        isScBridgeLoggedIn(),
+        isScBridgeLoggedIn(apiBase),
       ]);
 
       if (!rsiOk) {
@@ -208,7 +190,6 @@ export default defineBackground(() => {
       }
 
       // Upload to SC Bridge (using session cookies via credentials: "include")
-      const apiBase = await getApiBase();
       const response = await fetch(`${apiBase}/api/companion/sync/friends`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -234,9 +215,10 @@ export default defineBackground(() => {
   }
 
   async function handleGetStatus() {
-    const [rsiLoggedIn, authToken, consentGiven, lastSync] = await Promise.all([
+    const apiBase = await getApiBase();
+    const [rsiLoggedIn, scBridgeLoggedIn, consentGiven, lastSync] = await Promise.all([
       isRsiLoggedIn(),
-      getAuthToken(),
+      isScBridgeLoggedIn(apiBase),
       hasConsent(),
       getLastSync(),
     ]);
@@ -244,11 +226,9 @@ export default defineBackground(() => {
     return {
       type: "STATUS" as const,
       rsiLoggedIn,
-      scBridgeLoggedIn: authToken !== null,
+      scBridgeLoggedIn,
       consentGiven,
-      syncing,
       lastSync,
-      error: lastError,
     };
   }
 
@@ -261,6 +241,9 @@ export default defineBackground(() => {
 
   browser.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== FRIENDS_ALARM) return;
+
+    const friendsEnabled = await isCategoryEnabled("spectrumFriends");
+    if (!friendsEnabled) return;
 
     const rsiOk = await isRsiLoggedIn();
     if (!rsiOk) return;
