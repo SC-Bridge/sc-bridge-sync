@@ -37,9 +37,8 @@ Browser extension that syncs your Star Citizen hangar data from RSI to [SC Bridg
 
 1. Log in to [robertsspaceindustries.com](https://robertsspaceindustries.com)
 2. Log in to [scbridge.app](https://scbridge.app)
-3. Navigate to **My Hangar** on the RSI website
-4. The extension automatically loads and enhances the page with filters, search, and export
-5. Click **Sync to SC Bridge** to sync your hangar data
+3. Click the SC Bridge Sync extension icon and select **Open Sync & Import** to be taken to SC Bridge
+4. Follow the on-screen instructions to sync your hangar
 
 ## Features
 
