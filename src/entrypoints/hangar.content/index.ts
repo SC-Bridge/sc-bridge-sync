@@ -559,7 +559,7 @@ async function loadAllPages() {
 
 /** Fetch a page's HTML, parse the <li> nodes, and adopt them into the live document */
 async function fetchPageNodes(locale: string, page: number): Promise<PledgeEntry[]> {
-  const url = `/${locale}/account/pledges?page=${page}`;
+  const url = `${window.location.origin}/${locale}/account/pledges?page=${page}`;
   const response = await fetch(url, { credentials: "same-origin" });
   const html = await response.text();
 
@@ -1181,7 +1181,7 @@ async function collectBuyBackPledges(
 
       const locale = getLocale();
       const response = await fetch(
-        `/${locale}/account/buy-back-pledges?page=${page}&pagesize=${pageSize}`,
+        `${window.location.origin}/${locale}/account/buy-back-pledges?page=${page}&pagesize=${pageSize}`,
         { credentials: "same-origin" },
       );
       if (!response.ok) {
