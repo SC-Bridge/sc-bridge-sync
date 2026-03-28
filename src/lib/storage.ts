@@ -5,7 +5,7 @@
  * persisted here rather than held in memory.
  */
 
-import { STORAGE_KEYS, SYNC_CATEGORIES, type SyncCategoryKey } from "./constants";
+import { STORAGE_KEYS, SYNC_CATEGORIES, type SyncCategoryKey, type PrivacyMode } from "./constants";
 
 /** Get whether the user has given consent for data sync */
 export async function hasConsent(): Promise<boolean> {
@@ -81,6 +81,37 @@ export async function isCategoryEnabled(
 ): Promise<boolean> {
   const prefs = await getSyncPreferences();
   return prefs[key];
+}
+
+// ── Privacy Mode ──
+
+const VALID_MODES: PrivacyMode[] = ["off", "hidden", "stealth"];
+
+/** Get current privacy mode */
+export async function getPrivacyMode(): Promise<PrivacyMode> {
+  const result = await browser.storage.local.get(STORAGE_KEYS.privacyMode);
+  const mode = result[STORAGE_KEYS.privacyMode] as string | undefined;
+  return mode && VALID_MODES.includes(mode as PrivacyMode)
+    ? (mode as PrivacyMode)
+    : "off";
+}
+
+/** Set privacy mode */
+export async function setPrivacyMode(mode: PrivacyMode): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEYS.privacyMode]: mode });
+}
+
+/** Get stealth display percentage (default 10) */
+export async function getStealthPercent(): Promise<number> {
+  const result = await browser.storage.local.get(STORAGE_KEYS.stealthPercent);
+  const pct = result[STORAGE_KEYS.stealthPercent] as number | undefined;
+  return pct != null && pct >= 1 && pct <= 90 ? pct : 10;
+}
+
+/** Set stealth display percentage (clamped 1-90) */
+export async function setStealthPercent(pct: number): Promise<void> {
+  const clamped = Math.max(1, Math.min(90, pct));
+  await browser.storage.local.set({ [STORAGE_KEYS.stealthPercent]: clamped });
 }
 
 /** Checkpoint for resumable sync */

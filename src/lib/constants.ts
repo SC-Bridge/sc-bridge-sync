@@ -88,7 +88,13 @@ export const STORAGE_KEYS = {
   syncCheckpoint: "sync_checkpoint",
   /** User's sync preferences (which data categories to include) */
   syncPreferences: "sync_preferences",
+  /** Privacy mode: 'off' | 'hidden' | 'stealth' */
+  privacyMode: "privacy_mode",
+  /** Stealth mode display percentage (1-90) */
+  stealthPercent: "stealth_percent",
 } as const;
+
+export type PrivacyMode = "off" | "hidden" | "stealth";
 
 /**
  * High-level data categories the user can toggle.

@@ -33,12 +33,42 @@
           </a>
         </div>
 
-        <div id="data-settings" class="data-settings">
-          <div class="data-settings-header">
-            <span class="data-settings-title">Data Settings</span>
-            <span class="data-settings-desc">Choose what syncs to SC Bridge</span>
+        <div id="privacy-section" class="privacy-section">
+          <div class="privacy-header">
+            <span class="privacy-title">Privacy Mode</span>
+            <span class="privacy-desc">Control how dollar values display</span>
           </div>
-          <div id="sync-toggles" class="sync-toggles"></div>
+          <div class="privacy-modes" id="privacy-modes">
+            <label class="privacy-option">
+              <input type="radio" name="privacy-mode" value="off" checked />
+              <span class="privacy-option-info">
+                <span class="privacy-option-label">Off</span>
+                <span class="privacy-option-desc">Show real values</span>
+              </span>
+            </label>
+            <label class="privacy-option">
+              <input type="radio" name="privacy-mode" value="hidden" />
+              <span class="privacy-option-info">
+                <span class="privacy-option-label">Hidden</span>
+                <span class="privacy-option-desc">Replace with &bull;&bull;&bull;</span>
+              </span>
+            </label>
+            <label class="privacy-option">
+              <input type="radio" name="privacy-mode" value="stealth" />
+              <span class="privacy-option-info">
+                <span class="privacy-option-label">Stealth</span>
+                <span class="privacy-option-desc">Reduce by percentage</span>
+              </span>
+            </label>
+          </div>
+          <div id="stealth-settings" class="stealth-settings hidden">
+            <div class="stealth-row">
+              <span class="stealth-label">Display percentage</span>
+              <span class="stealth-value" id="stealth-value">10%</span>
+            </div>
+            <input type="range" id="stealth-slider" min="1" max="90" value="10" class="stealth-slider" />
+            <p class="stealth-preview" id="stealth-preview">A $1,000 ship will display as $100</p>
+          </div>
         </div>
 
         <div id="env-badge" class="env-badge hidden"></div>

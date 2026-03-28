@@ -6,13 +6,11 @@ import {
   getApiBase,
   getEnvOverride,
   setEnvOverride,
-  SYNC_CATEGORIES,
   type EnvKey,
-  type SyncCategoryKey,
 } from "@/lib/constants";
 import { isScBridgeLoggedIn } from "@/lib/sc-bridge-client";
 import { isRsiLoggedIn } from "@/lib/rsi-client";
-import { getSyncPreferences, setSyncPreferences } from "@/lib/storage";
+import { getPrivacyMode, setPrivacyMode, getStealthPercent, setStealthPercent } from "@/lib/storage";
 
 // ── Elements ──
 
@@ -104,32 +102,48 @@ async function refreshStatus() {
   }
 }
 
-// ── Data Settings ──
+// ── Privacy Mode ──
 
-const syncTogglesContainer = getEl("sync-toggles");
+const stealthSettings = getEl("stealth-settings");
+const stealthSlider = getEl<HTMLInputElement>("stealth-slider");
+const stealthValue = getEl("stealth-value");
+const stealthPreview = getEl("stealth-preview");
 
-async function renderSyncToggles() {
-  const prefs = await getSyncPreferences();
+function updateStealthPreview(pct: number) {
+  stealthValue.textContent = `${pct}%`;
+  const example = Math.round(1000 * pct / 100);
+  stealthPreview.textContent = `A $1,000 ship will display as $${example.toLocaleString()}`;
+}
 
-  syncTogglesContainer.innerHTML = Object.entries(SYNC_CATEGORIES)
-    .map(([key, cat]) => `
-      <label class="sync-toggle">
-        <input type="checkbox" data-cat="${key}" ${prefs[key as SyncCategoryKey] ? "checked" : ""} />
-        <span class="sync-toggle-info">
-          <span class="sync-toggle-label">${cat.label}</span>
-          <span class="sync-toggle-desc">${cat.description}</span>
-        </span>
-      </label>
-    `).join("");
+async function initPrivacyMode() {
+  const mode = await getPrivacyMode();
+  const pct = await getStealthPercent();
 
-  syncTogglesContainer.addEventListener("change", async (e) => {
+  // Set initial radio
+  const radios = document.querySelectorAll('input[name="privacy-mode"]') as NodeListOf<HTMLInputElement>;
+  for (const radio of radios) {
+    radio.checked = radio.value === mode;
+  }
+
+  // Set initial slider
+  stealthSlider.value = String(pct);
+  updateStealthPreview(pct);
+  stealthSettings.classList.toggle("hidden", mode !== "stealth");
+
+  // Radio change
+  const modesContainer = getEl("privacy-modes");
+  modesContainer.addEventListener("change", async (e) => {
     const target = e.target as HTMLInputElement;
-    const catKey = target.dataset.cat as SyncCategoryKey | undefined;
-    if (!catKey) return;
+    const newMode = target.value as "off" | "hidden" | "stealth";
+    await setPrivacyMode(newMode);
+    stealthSettings.classList.toggle("hidden", newMode !== "stealth");
+  });
 
-    const current = await getSyncPreferences();
-    current[catKey] = target.checked;
-    await setSyncPreferences(current);
+  // Slider change
+  stealthSlider.addEventListener("input", async () => {
+    const newPct = parseInt(stealthSlider.value, 10);
+    updateStealthPreview(newPct);
+    await setStealthPercent(newPct);
   });
 }
 
@@ -175,4 +189,4 @@ devtoolsApplyBtn.addEventListener("click", async () => {
 // ── Init ──
 
 refreshStatus();
-renderSyncToggles();
+initPrivacyMode();
