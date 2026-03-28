@@ -14,7 +14,7 @@
     "zip:firefox": "wxt zip -b firefox",
     "zip:edge": "wxt zip -b edge",
     "zip:opera": "wxt zip -b opera",
-    "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge && npm run zip:opera",
+    "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge && npm run zip:opera && node scripts/rename-zips.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
