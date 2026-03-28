@@ -159,8 +159,8 @@ export function toCsv(payload: Partial<SyncPayload>): string {
       ["store_credit_cents", a.store_credit_cents],
       ["uec_balance", a.uec_balance],
       ["rec_balance", a.rec_balance],
-      ["org_name", a.org_name],
-      ["org_sid", a.org_sid],
+      ["org_name", a.org?.name],
+      ["org_sid", a.org?.sid],
       ["referral_code", a.referral_code],
       ["has_game_package", a.has_game_package],
     ];
@@ -185,15 +185,15 @@ function pledgeRow(
     pledge.name,
     pledge.value,
     pledge.date,
-    pledge.configuration_value,
-    String(pledge.is_giftable),
-    String(pledge.is_reclaimable),
+    pledge.configurationValue,
+    String(pledge.isGiftable),
+    String(pledge.isReclaimable),
     item?.title ?? "",
     item?.kind ?? "",
-    item?.manufacturer_code ?? "",
-    item?.manufacturer_name ?? "",
-    item?.custom_name ?? "",
-    item?.is_nameable ? "true" : "false",
+    item?.manufacturerCode ?? "",
+    item?.manufacturer ?? "",
+    item?.customName ?? "",
+    item?.isNameable ? "true" : "false",
   ];
 }
 
@@ -212,10 +212,10 @@ function buybackRow(
     String(pledge.is_credit_reclaimable),
     item?.title ?? "",
     item?.kind ?? "",
-    item?.manufacturer_code ?? "",
-    item?.manufacturer_name ?? "",
-    item?.custom_name ?? "",
-    item?.is_nameable ? "true" : "false",
+    item?.manufacturerCode ?? "",
+    item?.manufacturer ?? "",
+    item?.customName ?? "",
+    item?.isNameable ? "true" : "false",
   ];
 }
 

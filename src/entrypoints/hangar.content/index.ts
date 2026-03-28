@@ -10,7 +10,7 @@
 
 import "./style.css";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
-import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS } from "@/lib/constants";
+import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase } from "@/lib/constants";
 import { csvEscape, downloadFile } from "@/lib/export";
 
 // ── Filter Types ──
@@ -46,6 +46,33 @@ const FILTERS: { key: FilterKey; label: string; group: "content" | "status" }[] 
 
 const VALUABLE_THRESHOLD = 100;
 const PROBE_BATCH = 10;
+const MAX_PAGES = 500;
+const COLLECT_TIMEOUT_MS = 120_000;
+const OBSERVER_TIMEOUT_MS = 30_000;
+const CONTENT_SCRIPT_INIT_MS = 3000;
+const BUYBACK_PAGE_SIZE = 100;
+const BUYBACK_MAX_PAGES = 100;
+
+/** Strip RSI pledge prefixes to show the actual content name */
+function cleanPledgeName(name: string): string {
+  return name
+    .replace(/^Standalone\s+Ships?\s*-\s*/i, "")
+    .replace(/^Package\s*-\s*/i, "")
+    .replace(/^Add-Ons\s*-\s*/i, "")
+    .replace(/^Combo\s*-\s*/i, "")
+    .trim();
+}
+
+/** Validate and sanitize a URL for safe use in CSS/HTML */
+function sanitizeImageUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url, "https://robertsspaceindustries.com");
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
 
 // ── State ──
 
@@ -114,7 +141,7 @@ function waitForPledgeList() {
     if (tryInit()) observer.disconnect();
   });
   observer.observe(document.body, { childList: true, subtree: true });
-  setTimeout(() => observer.disconnect(), 30_000);
+  setTimeout(() => observer.disconnect(), OBSERVER_TIMEOUT_MS);
 }
 
 function tryInit(): boolean {
@@ -136,7 +163,7 @@ function tryInit(): boolean {
   hidePager();
   const pagerObserver = new MutationObserver(() => { hidePager(); });
   pagerObserver.observe(document.body, { childList: true, subtree: true });
-  setTimeout(() => pagerObserver.disconnect(), 30_000);
+  setTimeout(() => pagerObserver.disconnect(), OBSERVER_TIMEOUT_MS);
 
   loadAllPages();
   return true;
@@ -176,14 +203,8 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
   if (!h3) return;
 
   // ── Clean up the title ──
-  // Strip RSI pledge prefixes to show the actual content name
-  let displayName = pledge.name
-    .replace(/^Standalone\s+Ships?\s*-\s*/i, "")
-    .replace(/^Package\s*-\s*/i, "")
-    .replace(/^Upgrade\s*-\s*/i, "CCU: ")
-    .replace(/^Add-Ons\s*-\s*/i, "")
-    .replace(/^Combo\s*-\s*/i, "")
-    .trim();
+  let displayName = cleanPledgeName(pledge.name)
+    .replace(/^Upgrade\s*-\s*/i, "CCU: ");
 
   // For ship pledges, show the actual ship name (handles CCU'd ships)
   const ship = pledge.items.find((i) => i.kind === "Ship" || i.kind === "Vehicle");
@@ -208,13 +229,7 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
 
   // ── Inject "Base Pledge" for upgraded ships ──
   if (pledge.isUpgraded && ship) {
-    // Extract original ship name from the pledge name
-    const baseName = pledge.name
-      .replace(/^Standalone\s+Ships?\s*-\s*/i, "")
-      .replace(/^Package\s*-\s*/i, "")
-      .replace(/^Add-Ons\s*-\s*/i, "")
-      .replace(/^Combo\s*-\s*/i, "")
-      .trim();
+    const baseName = cleanPledgeName(pledge.name);
 
     if (baseName !== ship.title) {
       const baseEl = document.createElement("div");
@@ -229,12 +244,13 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
 
   // Find the best image: ship item first, then any item with an image
   const itemImage = ship?.image ?? pledge.items.find((i) => i.image)?.image;
-  const fullUrl = itemImage
+  const rawUrl = itemImage
     ? (itemImage.startsWith("http") ? itemImage : `https://robertsspaceindustries.com${itemImage}`)
     : null;
+  const fullUrl = rawUrl ? sanitizeImageUrl(rawUrl) : null;
 
   if (fullUrl && imgEl) {
-    imgEl.style.backgroundImage = `url('${fullUrl}')`;
+    imgEl.style.backgroundImage = `url('${CSS.escape(fullUrl)}')`;
   }
 
   // ── Make thumbnail clickable for full-size image ──
@@ -323,15 +339,15 @@ function showImagePopup(thumbnailUrl: string, title: string) {
 
   document.body.appendChild(overlay);
 
-  // Close on backdrop click, close button, or Escape
-  backdrop.addEventListener("click", () => overlay.remove());
-  closeBtn.addEventListener("click", () => overlay.remove());
-  document.addEventListener("keydown", function handler(e) {
-    if (e.key === "Escape") {
-      overlay.remove();
-      document.removeEventListener("keydown", handler);
-    }
-  });
+  // Close on backdrop click, close button, or Escape — single cleanup path
+  const closeHandler = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  function close() {
+    overlay.remove();
+    document.removeEventListener("keydown", closeHandler);
+  }
+  backdrop.addEventListener("click", close);
+  closeBtn.addEventListener("click", close);
+  document.addEventListener("keydown", closeHandler);
 }
 
 // ── Data Parsing ──
@@ -520,9 +536,8 @@ async function loadAllPages() {
     }
 
     if (lastFullPage === PROBE_BATCH) {
-      const maxPage = 500;
       const remaining = Array.from(
-        { length: maxPage - PROBE_BATCH },
+        { length: MAX_PAGES - PROBE_BATCH },
         (_, i) => PROBE_BATCH + 1 + i,
       );
       updateLoadingState(true, `Loading remaining pages...`);
@@ -561,6 +576,10 @@ async function loadAllPages() {
 async function fetchPageNodes(locale: string, page: number): Promise<PledgeEntry[]> {
   const url = `${window.location.origin}/${locale}/account/pledges?page=${page}`;
   const response = await fetch(url, { credentials: "same-origin" });
+  if (!response.ok) {
+    console.warn(`[SC Bridge] Pledge page ${page} returned ${response.status}`);
+    return [];
+  }
   const html = await response.text();
 
   const parser = new DOMParser();
@@ -836,7 +855,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Run async tasks with bounded concurrency + delay between launches. */
+/** Run async tasks with bounded concurrency + serialized rate-limited dispatch. */
 async function concurrentMap<T, R>(
   items: T[],
   fn: (item: T) => Promise<R>,
@@ -853,16 +872,29 @@ async function concurrentMap<T, R>(
   const results: R[] = new Array(items.length);
   let idx = 0;
   let stopped = false;
-  let lastDispatchAt = 0;
+
+  // Serial dispatch queue — only one worker acquires the next item at a time,
+  // enforcing the rate limit without races between concurrent workers.
+  let dispatchReady = Promise.resolve();
+
+  async function acquireSlot(): Promise<number | null> {
+    return new Promise((resolve) => {
+      dispatchReady = dispatchReady.then(async () => {
+        if (stopped || idx >= items.length) {
+          resolve(null);
+          return;
+        }
+        const i = idx++;
+        if (i > 0) await delay(delayMs);
+        resolve(i);
+      });
+    });
+  }
 
   async function worker() {
-    while (!stopped && idx < items.length) {
-      const i = idx++;
-      // Global rate limit: wait until delayMs has passed since last dispatch
-      const now = Date.now();
-      const wait = Math.max(0, delayMs - (now - lastDispatchAt));
-      if (wait > 0) await delay(wait);
-      lastDispatchAt = Date.now();
+    while (!stopped) {
+      const i = await acquireSlot();
+      if (i === null) break;
       results[i] = await fn(items[i]);
       if (shouldStop?.(results[i], i)) {
         stopped = true;
@@ -878,7 +910,7 @@ async function concurrentMap<T, R>(
 
 async function handleCollectAll(): Promise<SyncPayload> {
   // Wait for initial pagination to finish (loading becomes false)
-  const deadline = Date.now() + 120_000; // 2 min — large hangars (600+ pledges) need time
+  const deadline = Date.now() + COLLECT_TIMEOUT_MS;
   while (loading) {
     if (Date.now() > deadline) {
       throw new Error("Timed out waiting for hangar data to load");
@@ -1173,16 +1205,14 @@ async function collectBuyBackPledges(
   // Scrape the server-rendered HTML pages instead — same approach community tools use.
   const buybacks: RsiBuyBackPledge[] = [];
   let page = 1;
-  const maxPages = 100;
-  const pageSize = 100;
 
   try {
-    while (page <= maxPages) {
+    while (page <= BUYBACK_MAX_PAGES) {
       onProgress(`Page ${page}...`);
 
       const locale = getLocale();
       const response = await fetch(
-        `${window.location.origin}/${locale}/account/buy-back-pledges?page=${page}&pagesize=${pageSize}`,
+        `${window.location.origin}/${locale}/account/buy-back-pledges?page=${page}&pagesize=${BUYBACK_PAGE_SIZE}`,
         { credentials: "same-origin" },
       );
       if (!response.ok) {
@@ -1251,7 +1281,7 @@ async function collectBuyBackPledges(
         }
       }
       // Also check: if we got a full page of results, there might be more
-      if (!hasNext && pledgeEls.length >= pageSize) {
+      if (!hasNext && pledgeEls.length >= BUYBACK_PAGE_SIZE) {
         hasNext = true;
       }
 
@@ -1348,13 +1378,15 @@ function showExportModal() {
 
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
+  const escapeHandler = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", escapeHandler);
+  };
   overlay.querySelector(".scb-popup-backdrop")?.addEventListener("click", close);
   overlay.querySelector(".scb-popup-close")?.addEventListener("click", close);
   overlay.querySelector("#scb-export-cancel")?.addEventListener("click", close);
-  document.addEventListener("keydown", function handler(e) {
-    if (e.key === "Escape") { close(); document.removeEventListener("keydown", handler); }
-  });
+  document.addEventListener("keydown", escapeHandler);
 
   overlay.querySelector("#scb-export-go")?.addEventListener("click", () => {
     const cats: Record<string, boolean> = {};
@@ -1670,7 +1702,7 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
 
 // ── Sync ──
 
-function triggerSync() {
-  // Redirect to the SC Bridge import page where the actual sync happens
-  window.open("https://scbridge.app/sync-import", "_blank");
+async function triggerSync() {
+  const apiBase = await getApiBase();
+  window.open(`${apiBase}/sync-import`, "_blank");
 }

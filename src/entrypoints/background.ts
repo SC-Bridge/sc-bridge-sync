@@ -14,6 +14,7 @@ import type { ExtensionMessage, SyncPayload } from "@/lib/types";
 
 const LAST_PAYLOAD_KEY = "last_sync_payload";
 const FRIENDS_ALARM = "spectrum-friends-sync";
+const CONTENT_SCRIPT_INIT_MS = 3000;
 
 function isCollectError(v: unknown): v is { type: "COLLECT_ERROR"; error: string } {
   return typeof v === "object" && v !== null && (v as { type?: string }).type === "COLLECT_ERROR";
@@ -114,7 +115,7 @@ export default defineBackground(() => {
             await browser.tabs.reload(tabId);
             await waitForTabComplete(tabId);
             // Wait for content script to init after page load
-            await new Promise((r) => setTimeout(r, 3000));
+            await new Promise((r) => setTimeout(r, CONTENT_SCRIPT_INIT_MS));
             reloaded = true;
             continue;
           }
@@ -150,7 +151,7 @@ export default defineBackground(() => {
 
       function listener(
         updatedTabId: number,
-        changeInfo: browser.Tabs.OnUpdatedChangeInfoType,
+        changeInfo: { status?: string },
       ) {
         if (updatedTabId === tabId && changeInfo.status === "complete") {
           clearTimeout(timer);

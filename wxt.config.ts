@@ -11,19 +11,21 @@ export default defineConfig({
       "https://robertsspaceindustries.com/*",
       "https://*.robertsspaceindustries.com/*",
       "https://scbridge.app/*",
+      "https://staging.scbridge.app/*",
     ],
     browser_specific_settings: {
       gecko: {
         id: "sync@scbridge.app",
         strict_min_version: "140.0",
-        data_collection_permissions: {
+        // Firefox AMO requires data_collection_permissions — not in WXT's types
+        ...({ data_collection_permissions: {
           required: [
             "personallyIdentifyingInfo",
             "authenticationInfo",
             "websiteContent",
           ],
           optional: [],
-        },
+        }} as Record<string, unknown>),
       },
     },
   },
