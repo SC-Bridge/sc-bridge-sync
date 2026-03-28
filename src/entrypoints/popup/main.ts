@@ -6,10 +6,13 @@ import {
   getApiBase,
   getEnvOverride,
   setEnvOverride,
+  SYNC_CATEGORIES,
   type EnvKey,
+  type SyncCategoryKey,
 } from "@/lib/constants";
 import { isScBridgeLoggedIn } from "@/lib/sc-bridge-client";
 import { isRsiLoggedIn } from "@/lib/rsi-client";
+import { getSyncPreferences, setSyncPreferences } from "@/lib/storage";
 
 // ── Elements ──
 
@@ -101,6 +104,35 @@ async function refreshStatus() {
   }
 }
 
+// ── Data Settings ──
+
+const syncTogglesContainer = getEl("sync-toggles");
+
+async function renderSyncToggles() {
+  const prefs = await getSyncPreferences();
+
+  syncTogglesContainer.innerHTML = Object.entries(SYNC_CATEGORIES)
+    .map(([key, cat]) => `
+      <label class="sync-toggle">
+        <input type="checkbox" data-cat="${key}" ${prefs[key as SyncCategoryKey] ? "checked" : ""} />
+        <span class="sync-toggle-info">
+          <span class="sync-toggle-label">${cat.label}</span>
+          <span class="sync-toggle-desc">${cat.description}</span>
+        </span>
+      </label>
+    `).join("");
+
+  syncTogglesContainer.addEventListener("change", async (e) => {
+    const target = e.target as HTMLInputElement;
+    const catKey = target.dataset.cat as SyncCategoryKey | undefined;
+    if (!catKey) return;
+
+    const current = await getSyncPreferences();
+    current[catKey] = target.checked;
+    await setSyncPreferences(current);
+  });
+}
+
 // ── Dev Tools (Ctrl+Shift+D) ──
 
 document.addEventListener("keydown", (e) => {
@@ -143,3 +175,4 @@ devtoolsApplyBtn.addEventListener("click", async () => {
 // ── Init ──
 
 refreshStatus();
+renderSyncToggles();
