@@ -10,8 +10,9 @@
 
 import "./style.css";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
-import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase } from "@/lib/constants";
+import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase, type PrivacyMode } from "@/lib/constants";
 import { csvEscape, downloadFile } from "@/lib/export";
+import { getPrivacyMode, getStealthPercent } from "@/lib/storage";
 
 // ── Filter Types ──
 
@@ -90,6 +91,10 @@ let searchQuery = "";
 let loading = true;
 let nativeList: HTMLElement | null = null;
 
+// Privacy mode state
+let privacyMode: PrivacyMode = "off";
+let stealthPercent = 10;
+
 function getLocale(): string {
   const match = window.location.pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//i);
   return match ? match[1] : "en";
@@ -128,10 +133,27 @@ export default defineContentScript({
       }
     });
 
+    // Load privacy mode and listen for changes from popup
+    loadPrivacyMode();
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      if ("privacy_mode" in changes || "stealth_percent" in changes) {
+        loadPrivacyMode();
+      }
+    });
+
     console.log("[SC Bridge] Hangar enhancement loaded");
     waitForPledgeList();
   },
 });
+
+// ── Privacy Mode ──
+
+async function loadPrivacyMode() {
+  privacyMode = await getPrivacyMode();
+  stealthPercent = await getStealthPercent();
+  if (!loading) updateStats();
+}
 
 // ── Initialization ──
 
@@ -810,7 +832,11 @@ function updateStats() {
 }
 
 function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+  if (privacyMode === "hidden") return "$\u2022\u2022\u2022";
+  const display = privacyMode === "stealth"
+    ? Math.round(amount * stealthPercent / 100)
+    : amount;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(display);
 }
 
 // ── RSI Fetch Helpers (content-script-safe) ──
