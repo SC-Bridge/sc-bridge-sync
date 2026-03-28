@@ -938,7 +938,8 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
   onProgress("Dashboard...");
   try {
     // ── 1. Dashboard props — profile, concierge, subscriber, credits, featured badges ──
-    const response = await fetch("/en/account/dashboard", { credentials: "same-origin" });
+    const locale = getLocale();
+    const response = await fetch(`${window.location.origin}/${locale}/account/dashboard`, { credentials: "same-origin" });
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
@@ -1057,7 +1058,7 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
     onProgress("Orgs...");
     await delay(RSI_REQUEST_DELAY_MS);
     try {
-      const orgResponse = await fetch("/en/account/organization", { credentials: "same-origin" });
+      const orgResponse = await fetch(`${window.location.origin}/${locale}/account/organization`, { credentials: "same-origin" });
       const orgHtml = await orgResponse.text();
       const orgDoc = new DOMParser().parseFromString(orgHtml, "text/html");
 
