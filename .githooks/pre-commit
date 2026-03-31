@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-commit hook: typecheck + validate zip naming convention
+#
+# Zip assets MUST be named sc-bridge-sync-{browser}.zip (no version numbers).
+# This ensures stable download URLs on GitHub releases:
+#   /releases/latest/download/sc-bridge-sync-chrome.zip
+
+# Typecheck
+npm run typecheck || exit 1
+
+# Check for incorrectly named zips being committed
+BAD_ZIPS=$(git diff --cached --name-only | grep -E '\.zip$' | grep -v -E 'sc-bridge-sync-(chrome|firefox|edge|opera)\.zip$' || true)
+if [ -n "$BAD_ZIPS" ]; then
+  echo ""
+  echo "ERROR: Zip files must be named sc-bridge-sync-{browser}.zip"
+  echo "Found incorrectly named zips:"
+  echo "$BAD_ZIPS"
+  echo ""
+  echo "Use 'npm run zip:all' to build correctly named zips."
+  exit 1
+fi
