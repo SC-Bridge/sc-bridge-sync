@@ -35,6 +35,8 @@ export interface RsiPledge {
   hasLti: boolean;
   isWarbond: boolean;
   isReward: boolean;
+  /** Extracted insurance level e.g. "LTI", "120-Month", "6-Month", null if none */
+  insuranceType: string | null;
 }
 
 /** An item within an RSI pledge */

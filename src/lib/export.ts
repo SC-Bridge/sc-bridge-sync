@@ -171,7 +171,7 @@ export function toCsv(payload: Partial<SyncPayload>): string {
     }
   }
 
-  return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+  return "\uFEFF" + rows.map((row) => row.map(csvEscape).join(",")).join("\n");
 }
 
 function pledgeRow(
@@ -240,9 +240,25 @@ export function downloadFile(
 ) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
+
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+  } catch {
+    // Programmatic click failed (e.g. sandboxed context) — try downloads API
+    if (browser.downloads?.download) {
+      browser.downloads.download({ url, filename, saveAs: true }).catch((err) => {
+        console.error("[downloadFile] browser.downloads.download failed:", err);
+      });
+      return; // don't revoke URL yet — downloads API needs it
+    }
+    console.error(
+      "[downloadFile] Programmatic click failed and browser.downloads API unavailable. " +
+      "Try right-clicking the export button and using 'Save link as...'.",
+    );
+  }
+
   URL.revokeObjectURL(url);
 }

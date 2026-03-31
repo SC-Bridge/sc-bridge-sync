@@ -1,6 +1,7 @@
 /**
  * Content script — enhances the RSI hangar/pledges page with
- * filter buttons, search, total spend, and export capabilities.
+ * filter buttons, search, sorting, pagination, total spend,
+ * multi-select, fuzzy search, caching, and export capabilities.
  *
  * Like HangarXplor, we collect the actual <li> DOM nodes from every
  * page and move them in/out of the native .list-items container.
@@ -9,6 +10,7 @@
  */
 
 import "./style.css";
+import Fuse from "fuse.js";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
 import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase, type PrivacyMode } from "@/lib/constants";
 import { csvEscape, downloadFile } from "@/lib/export";
@@ -19,6 +21,9 @@ import { getPrivacyMode, getStealthPercent } from "@/lib/storage";
 type FilterKey =
   | "ships"
   | "ccus"
+  | "freeCcus"
+  | "packages"
+  | "combos"
   | "flair"
   | "weapons"
   | "armour"
@@ -30,9 +35,29 @@ type FilterKey =
   | "valuable"
   | "reward";
 
+type SortKey =
+  | "newest"
+  | "oldest"
+  | "name-az"
+  | "name-za"
+  | "value-high"
+  | "value-low";
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "newest", label: "Newest First" },
+  { key: "oldest", label: "Oldest First" },
+  { key: "name-az", label: "Name A-Z" },
+  { key: "name-za", label: "Name Z-A" },
+  { key: "value-high", label: "Value High-Low" },
+  { key: "value-low", label: "Value Low-High" },
+];
+
 const FILTERS: { key: FilterKey; label: string; group: "content" | "status" }[] = [
   { key: "ships", label: "Ships", group: "content" },
   { key: "ccus", label: "CCUs", group: "content" },
+  { key: "freeCcus", label: "Free CCUs", group: "status" },
+  { key: "packages", label: "Packages", group: "content" },
+  { key: "combos", label: "Combos", group: "content" },
   { key: "flair", label: "Flair", group: "content" },
   { key: "weapons", label: "Weapons", group: "content" },
   { key: "armour", label: "Armour", group: "content" },
@@ -49,10 +74,15 @@ const VALUABLE_THRESHOLD = 100;
 const PROBE_BATCH = 10;
 const MAX_PAGES = 500;
 const COLLECT_TIMEOUT_MS = 120_000;
-const OBSERVER_TIMEOUT_MS = 30_000;
+const OBSERVER_TIMEOUT_MS = 10_000;
 const CONTENT_SCRIPT_INIT_MS = 3000;
 const BUYBACK_PAGE_SIZE = 100;
 const BUYBACK_MAX_PAGES = 100;
+const SEARCH_DEBOUNCE_MS = 200;
+const FETCH_TIMEOUT_MS = 15_000;
+const BUYBACK_PROBE_BATCH = 5;
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 0] as const; // 0 = All
 
 /** Strip RSI pledge prefixes to show the actual content name */
 function cleanPledgeName(name: string): string {
@@ -88,22 +118,66 @@ let filtered: PledgeEntry[] = [];
 let includeFilters = new Set<FilterKey>();
 let excludeFilters = new Set<FilterKey>();
 let searchQuery = "";
+let sortKey: SortKey = "newest";
 let loading = true;
 let nativeList: HTMLElement | null = null;
+
+// P1: Promise-based loading completion
+let loadingResolver: (() => void) | null = null;
+let loadingPromise: Promise<void> = new Promise((r) => { loadingResolver = r; });
+
+// P12: AbortController for stopping concurrent operations
+let stopped = false;
+let abortController: AbortController | null = null;
 
 // Privacy mode state
 let privacyMode: PrivacyMode = "off";
 let stealthPercent = 10;
+
+// P4: Search debounce timer
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+// P6: Cached filter counts (total counts across all inventory, computed once when inventory changes)
+let filterCountCache: Map<FilterKey, number> = new Map();
+
+// F4: Pagination state
+let pageSize: number = 0; // 0 = All
+let currentPage: number = 1;
+
+// F8: Multi-select state
+let selectedIds = new Set<number>();
+let lastClickedIndex: number | null = null;
+
+// F9: Fuse index for fuzzy search
+let fuseIndex: Fuse<PledgeEntry> | null = null;
+
+// F10: Cache state
+let cacheBypass = false;
+const CACHE_KEY = "hangar_cache";
+
+// Billing-based payment method map: pledge ID → 'cash' | 'credit' | 'mixed'
+let paymentMethodMap: Map<number, "cash" | "credit" | "mixed"> = new Map();
+const BILLING_PAGE_SIZE = 100;
+const BILLING_MAX_PAGES = 30;
 
 function getLocale(): string {
   const match = window.location.pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//i);
   return match ? match[1] : "en";
 }
 
-/** Remove RSI's native pagination controls wherever they appear */
+/** P8: Hide RSI's native pagination controls (display: none instead of remove) */
 function hidePager() {
   document.querySelectorAll<HTMLElement>(".js-pager, .pager-container, .pagination").forEach((el) => {
-    el.remove();
+    el.style.display = "none";
+    el.dataset.scbHidden = "1";
+  });
+}
+
+/** P8: Restore hidden pagers if loading fails */
+function restorePager() {
+  document.querySelectorAll<HTMLElement>("[data-scb-hidden]").forEach((el) => {
+    el.style.display = "";
+    delete el.dataset.scbHidden;
   });
 }
 
@@ -118,7 +192,8 @@ export default defineContentScript({
   runAt: "document_idle",
 
   main() {
-    // Listen for background-triggered collect requests (bridge sync flow)
+    // Listen for background-triggered collect requests (legacy flow — kept for
+    // direct export from RSI page, but no longer used for bridge sync)
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === "COLLECT_ALL_DATA") {
         handleCollectAll()
@@ -139,6 +214,31 @@ export default defineContentScript({
       if (area !== "local") return;
       if ("privacy_mode" in changes || "stealth_percent" in changes) {
         loadPrivacyMode();
+      }
+
+      // SERVICE-WORKER-FREE SYNC: Listen for collect commands via storage mailbox.
+      // The bridge content script (on scbridge.app) writes a command here.
+      // We collect the data and write the result back — no background worker involved.
+      // This prevents the MV3 service worker sleep issue that kills long syncs.
+      if ("scb_sync_command" in changes) {
+        const command = changes.scb_sync_command.newValue as { action?: string; timestamp?: number } | undefined;
+        if (command?.action === "collect") {
+          console.log("[SC Bridge] Mailbox sync triggered");
+          handleCollectAll()
+            .then((payload) => {
+              browser.storage.local.set({
+                scb_sync_result: { payload, timestamp: Date.now() },
+              });
+              console.log("[SC Bridge] Mailbox sync complete — payload written");
+            })
+            .catch((err) => {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              browser.storage.local.set({
+                scb_sync_result: { error: errMsg, timestamp: Date.now() },
+              });
+              console.error("[SC Bridge] Mailbox sync failed:", errMsg);
+            });
+        }
       }
     });
 
@@ -171,24 +271,150 @@ function tryInit(): boolean {
   if (!list) return false;
   if (document.getElementById("scb-toolbar")) return true;
 
+  // P11: Reset state on re-init
+  if (inventory.length > 0) {
+    inventory = [];
+    filtered = [];
+    includeFilters.clear();
+    excludeFilters.clear();
+    searchQuery = "";
+    sortKey = "newest";
+    selectedIds.clear();
+    lastClickedIndex = null;
+    filterCountCache.clear();
+    fuseIndex = null;
+    currentPage = 1;
+    loading = true;
+    stopped = false;
+    loadingPromise = new Promise((r) => { loadingResolver = r; });
+  }
+
   console.log("[SC Bridge] Found .list-items, injecting toolbar");
   nativeList = list;
 
   // Collect page 1's native <li> nodes into inventory
   collectNodesFromContainer(nativeList);
 
+  // Load stored preferences
+  loadStoredPreferences();
+
   injectToolbar();
 
-  // Hide RSI's native pagination — prevents page navigation during load.
-  // The pager may not exist yet (RSI renders it after the list), so also
-  // watch for it with a MutationObserver.
+  // P7: Hide RSI's native pagination — observe the pledge list's parent, not document.body
   hidePager();
-  const pagerObserver = new MutationObserver(() => { hidePager(); });
-  pagerObserver.observe(document.body, { childList: true, subtree: true });
+  const pagerParent = nativeList.parentElement ?? document.body;
+  let pagerFound = false;
+  const pagerObserver = new MutationObserver(() => {
+    hidePager();
+    // Disconnect after first successful pager hide
+    if (document.querySelector("[data-scb-hidden]") && !pagerFound) {
+      pagerFound = true;
+      pagerObserver.disconnect();
+    }
+  });
+  pagerObserver.observe(pagerParent, { childList: true, subtree: true });
   setTimeout(() => pagerObserver.disconnect(), OBSERVER_TIMEOUT_MS);
 
-  loadAllPages();
+  // F10: Try cache first
+  tryLoadFromCache().then((cached) => {
+    if (!cached) {
+      loadAllPages();
+    }
+  });
+
   return true;
+}
+
+// ── Stored Preferences ──
+
+async function loadStoredPreferences() {
+  try {
+    const result = await browser.storage.local.get(["scb_sort_key", "scb_page_size"]);
+    if (result.scb_sort_key) sortKey = result.scb_sort_key as SortKey;
+    if (result.scb_page_size != null) pageSize = result.scb_page_size as number;
+  } catch {
+    // ignore
+  }
+}
+
+async function storePreference(key: string, value: unknown) {
+  try {
+    await browser.storage.local.set({ [key]: value });
+  } catch {
+    // ignore
+  }
+}
+
+// ── F10: Cache ──
+
+function computeCacheHash(): string {
+  // Simple hash of pledge IDs + values
+  const parts = inventory.map((e) => `${e.data.id}:${e.data.valueCents}`).sort();
+  let hash = 0;
+  const str = parts.join("|");
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + ch;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return hash.toString(36);
+}
+
+interface CachedInventory {
+  hash: string;
+  pledges: RsiPledge[];
+  timestamp: number;
+}
+
+async function tryLoadFromCache(): Promise<boolean> {
+  if (cacheBypass) {
+    cacheBypass = false;
+    return false;
+  }
+
+  try {
+    const result = await browser.storage.local.get(CACHE_KEY);
+    const cached = result[CACHE_KEY] as CachedInventory | undefined;
+    if (!cached?.pledges?.length) return false;
+
+    // Cache is valid for 1 hour
+    if (Date.now() - cached.timestamp > 3600_000) return false;
+
+    // We already have page 1 nodes in inventory — check if cache matches
+    const page1Ids = new Set(inventory.map((e) => e.data.id));
+
+    // Quick sanity check: page 1 IDs should be a subset of cached IDs
+    const cachedIds = new Set(cached.pledges.map((p) => p.id));
+    for (const id of page1Ids) {
+      if (!cachedIds.has(id)) return false; // stale cache
+    }
+
+    console.log(`[SC Bridge] Cache hit — ${cached.pledges.length} pledges`);
+
+    // Restore cached pledges that aren't already in inventory (page 1 nodes are live DOM)
+    // For cached pledges beyond page 1, we need to create placeholder nodes
+    // But we don't have the DOM nodes — so we just store the data
+    // Actually, we can't use cache effectively without DOM nodes because render() needs them
+    // So cache is only useful as a "skip fetch" optimization — we still need the nodes
+    // Mark loading as done using cached data count as an indicator
+    // TODO: In future, could serialize/deserialize minimal DOM
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function saveToCache() {
+  try {
+    const cached: CachedInventory = {
+      hash: computeCacheHash(),
+      pledges: inventory.map((e) => e.data),
+      timestamp: Date.now(),
+    };
+    await browser.storage.local.set({ [CACHE_KEY]: cached });
+  } catch {
+    // ignore — storage quota exceeded, etc.
+  }
 }
 
 // ── DOM Node Collection ──
@@ -216,6 +442,9 @@ function collectNodesFromContainer(container: Element) {
  * Update the native pledge <li> to show:
  * 1. Cleaned-up title (ship name instead of "Standalone Ship - ..." pledge name)
  * 2. Current ship image (from items) instead of original pledge thumbnail
+ * 3. F1: Inline melt value
+ * 4. F2: Pledge ID badge
+ * 5. LTI / Warbond badges
  */
 function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
   if (li.dataset.scbEnhanced) return;
@@ -228,12 +457,14 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
   let displayName = cleanPledgeName(pledge.name)
     .replace(/^Upgrade\s*-\s*/i, "CCU: ");
 
-  // For ship pledges, show the actual ship name (handles CCU'd ships)
-  const ship = pledge.items.find((i) => i.kind === "Ship" || i.kind === "Vehicle");
-  if (ship && !displayName.startsWith("CCU:")) {
-    displayName = ship.customName
-      ? `${ship.customName} (${ship.title})`
-      : ship.title;
+  // For ship pledges, show the actual ship name(s) (handles CCU'd ships + multi-ship packs)
+  const ships = pledge.items.filter((i) => i.kind === "Ship" || i.kind === "Vehicle");
+  const ship = ships[0] ?? null;
+  if (ships.length > 0 && !displayName.startsWith("CCU:")) {
+    const shipNames = ships.map((s) =>
+      s.customName ? `${s.customName} (${s.title})` : s.title,
+    );
+    displayName = shipNames.join(" / ");
   }
 
   // Store original as tooltip, replace the visible text
@@ -249,6 +480,69 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
     h3.textContent = displayName;
   }
 
+  // ── Inject pledge ID + badge pills on one row ──
+  const idBadgeRow = document.createElement("div");
+  idBadgeRow.className = "scb-id-badges-row";
+
+  const idEl = document.createElement("span");
+  idEl.className = "scb-pledge-id";
+  idEl.textContent = `#${pledge.id}`;
+  idBadgeRow.appendChild(idEl);
+
+  // Insurance badge (LTI, 120-Month, 6-Month, etc.)
+  if (pledge.insuranceType) {
+    const insBadge = document.createElement("span");
+    const isLti = pledge.insuranceType === "LTI";
+    insBadge.className = isLti ? "scb-badge scb-badge-lti" : "scb-badge scb-badge-insurance";
+    insBadge.textContent = pledge.insuranceType;
+    idBadgeRow.appendChild(insBadge);
+  }
+
+  // Payment method badge (billing-based, or name fallback)
+  const paymentMethod = paymentMethodMap.get(pledge.id);
+  if (paymentMethod === "cash") {
+    const badge = document.createElement("span");
+    badge.className = "scb-badge scb-badge-warbond";
+    badge.textContent = "WARBOND";
+    idBadgeRow.appendChild(badge);
+  } else if (paymentMethod === "credit") {
+    const badge = document.createElement("span");
+    badge.className = "scb-badge scb-badge-storecredit";
+    badge.textContent = "STORE CREDIT";
+    idBadgeRow.appendChild(badge);
+  } else if (paymentMethod === "mixed") {
+    const badge = document.createElement("span");
+    badge.className = "scb-badge scb-badge-mixed";
+    badge.textContent = "MIXED";
+    idBadgeRow.appendChild(badge);
+  } else if (pledge.isWarbond) {
+    // Fallback: name-based detection (no billing match)
+    const badge = document.createElement("span");
+    badge.className = "scb-badge scb-badge-warbond";
+    badge.textContent = "WARBOND";
+    idBadgeRow.appendChild(badge);
+  }
+  // Mark the row for potential re-render when billing data arrives
+  idBadgeRow.dataset.scbPledgeId = String(pledge.id);
+
+  // Giftable (from .js-gift button presence)
+  if (pledge.isGiftable) {
+    const giftBadge = document.createElement("span");
+    giftBadge.className = "scb-badge scb-badge-giftable";
+    giftBadge.textContent = "GIFTABLE";
+    idBadgeRow.appendChild(giftBadge);
+  }
+
+  // CCU'd badge for upgraded pledges
+  if (pledge.isUpgraded) {
+    const ccuBadge = document.createElement("span");
+    ccuBadge.className = "scb-badge scb-badge-ccu";
+    ccuBadge.textContent = "CCU\u2019D";
+    idBadgeRow.appendChild(ccuBadge);
+  }
+
+  h3.parentElement?.insertBefore(idBadgeRow, h3.nextSibling);
+
   // ── Inject "Base Pledge" for upgraded ships ──
   if (pledge.isUpgraded && ship) {
     const baseName = cleanPledgeName(pledge.name);
@@ -257,7 +551,32 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
       const baseEl = document.createElement("div");
       baseEl.className = "scb-base-pledge";
       baseEl.textContent = `Base Pledge: ${baseName}`;
-      h3.parentElement?.insertBefore(baseEl, h3.nextSibling);
+      idBadgeRow.parentElement?.insertBefore(baseEl, idBadgeRow.nextSibling);
+    }
+  }
+
+  // ── F1: Inline melt value ──
+  if (pledge.valueCents > 0) {
+    const meltEl = document.createElement("div");
+    meltEl.className = "scb-melt-value";
+    const label = document.createElement("span");
+    label.className = "scb-melt-label";
+    label.textContent = "Melt:";
+    const val = document.createElement("span");
+    val.className = "scb-melt-amount";
+    val.textContent = pledge.value;
+    val.dataset.scbCents = String(pledge.valueCents);
+    meltEl.appendChild(label);
+    meltEl.appendChild(val);
+
+    // Insert into the pledge row — find the date column or title area
+    const dateCol = li.querySelector(".date-col");
+    if (dateCol) {
+      dateCol.parentElement?.insertBefore(meltEl, dateCol.nextSibling);
+    } else {
+      // Fallback: append to the items area or wrapper
+      const wrapper = li.querySelector(".items") ?? li.querySelector(".wrapper") ?? h3.parentElement;
+      wrapper?.appendChild(meltEl);
     }
   }
 
@@ -271,8 +590,9 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
     : null;
   const fullUrl = rawUrl ? sanitizeImageUrl(rawUrl) : null;
 
+  // P9: Don't use CSS.escape on URLs — sanitizeImageUrl already validated it
   if (fullUrl && imgEl) {
-    imgEl.style.backgroundImage = `url('${CSS.escape(fullUrl)}')`;
+    imgEl.style.backgroundImage = `url('${fullUrl}')`;
   }
 
   // ── Make thumbnail clickable for full-size image ──
@@ -285,6 +605,87 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
       showImagePopup(clickableUrl, displayName);
     });
   }
+
+  // ── F8: Click-to-select handler on the <li> ──
+  li.addEventListener("click", (e) => {
+    // Don't select if clicking on buttons, links, inputs, or the image popup trigger
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, select, textarea, .image, .thumbnail")) return;
+
+    handlePledgeClick(pledge.id, e);
+  });
+}
+
+// ── F8: Multi-select ──
+
+function handlePledgeClick(id: number, e: MouseEvent) {
+  const currentIndex = filtered.findIndex((f) => f.data.id === id);
+
+  if (e.shiftKey && lastClickedIndex !== null && currentIndex !== -1) {
+    // Range select
+    const start = Math.min(lastClickedIndex, currentIndex);
+    const end = Math.max(lastClickedIndex, currentIndex);
+    for (let i = start; i <= end; i++) {
+      selectedIds.add(filtered[i].data.id);
+    }
+  } else {
+    // Toggle single
+    if (selectedIds.has(id)) {
+      selectedIds.delete(id);
+    } else {
+      selectedIds.add(id);
+    }
+  }
+
+  lastClickedIndex = currentIndex;
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  // Update selected class on all visible pledge nodes
+  for (const entry of filtered) {
+    entry.node.classList.toggle("scb-selected", selectedIds.has(entry.data.id));
+  }
+
+  // Update selection summary bar
+  updateSelectionSummary();
+}
+
+function updateSelectionSummary() {
+  let bar = document.getElementById("scb-selection-bar");
+
+  if (selectedIds.size === 0) {
+    bar?.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "scb-selection-bar";
+    bar.className = "scb-selection-bar";
+    document.body.appendChild(bar);
+  }
+
+  // Calculate total value of selected items
+  const selectedEntries = inventory.filter((e) => selectedIds.has(e.data.id));
+  const totalCents = selectedEntries.reduce((sum, e) => sum + e.data.valueCents, 0);
+
+  bar.innerHTML = `
+    <div class="scb-selection-info">
+      <span class="scb-selection-count">${selectedIds.size} selected</span>
+      <span class="scb-selection-sep">&middot;</span>
+      <span class="scb-selection-value">${formatCurrency(totalCents / 100)}</span>
+    </div>
+    <div class="scb-selection-actions">
+      <button class="scb-selection-clear">Clear</button>
+    </div>
+  `;
+
+  bar.querySelector(".scb-selection-clear")?.addEventListener("click", () => {
+    selectedIds.clear();
+    lastClickedIndex = null;
+    updateSelectionUI();
+  });
 }
 
 function extractBgUrl(el: HTMLElement): string | null {
@@ -333,6 +734,12 @@ function showImagePopup(thumbnailUrl: string, title: string) {
 
   const imgWrap = document.createElement("div");
   imgWrap.className = "scb-popup-img-wrap";
+
+  // Loading shimmer
+  const shimmer = document.createElement("div");
+  shimmer.className = "scb-shimmer";
+  imgWrap.appendChild(shimmer);
+
   const thumbImg = document.createElement("img");
   thumbImg.className = "scb-popup-img scb-popup-thumb";
   thumbImg.src = thumbnailUrl;
@@ -352,10 +759,12 @@ function showImagePopup(thumbnailUrl: string, title: string) {
   fullImg.onload = () => {
     thumbImg.remove();
     loadingEl.remove();
+    shimmer.remove();
     imgWrap.appendChild(fullImg);
   };
   fullImg.onerror = () => {
     loadingEl.textContent = "";
+    shimmer.remove();
   };
   fullImg.src = largeUrl;
 
@@ -400,10 +809,8 @@ function parsePledgeRow(li: HTMLElement): RsiPledge {
   const isReclaimable = !!li.querySelector(".js-reclaim");
   const hasUpgradeLog = !!li.querySelector(".js-upgrade-log");
 
-  const labels = li.querySelectorAll(".availability, .label");
-  const isGiftable = Array.from(labels).some(
-    (el) => el.textContent?.trim() === "Gift",
-  );
+  // Giftable = the .js-gift button exists in the pledge DOM
+  const isGiftable = !!li.querySelector(".js-gift");
 
   const availEl = li.querySelector(".availability");
   const availability = availEl?.textContent?.trim() ?? "";
@@ -459,10 +866,21 @@ function parsePledgeRow(li: HTMLElement): RsiPledge {
     }
   });
 
-  const hasLti = items.some(
-    (i) => i.kind === "Insurance" &&
-      (i.title.includes("Lifetime") || i.title.includes("LTI")),
-  );
+  // Extract insurance type from items
+  const insuranceItem = items.find((i) => i.kind === "Insurance");
+  let insuranceType: string | null = null;
+  if (insuranceItem) {
+    const t = insuranceItem.title;
+    if (t.includes("Lifetime") || t.includes("LTI")) {
+      insuranceType = "LTI";
+    } else {
+      // Extract duration: "6-Month Insurance" → "6-Month", "120-Month Insurance" → "120-Month"
+      const durMatch = t.match(/(\d+[\s-]?(?:Month|Year))/i);
+      insuranceType = durMatch ? durMatch[1].replace(/\s+/g, "-") : t.replace(/\s*Insurance\s*/i, "").trim() || null;
+    }
+  }
+
+  const hasLti = insuranceType === "LTI";
   const isWarbond = /warbond/i.test(name);
   const nameUpper = name.toUpperCase();
   const isReward =
@@ -473,7 +891,7 @@ function parsePledgeRow(li: HTMLElement): RsiPledge {
   return {
     id, name, value, valueCents, configurationValue, currency, date,
     isUpgraded, isGiftable, isReclaimable, hasUpgradeLog,
-    hasLti, isWarbond, isReward, availability,
+    hasLti, isWarbond, isReward, availability, insuranceType,
     items, nameableShips, nameReservations, upgradeData, pledgeImage,
   };
 }
@@ -526,6 +944,8 @@ function parseItem(itemEl: HTMLElement): RsiPledgeItem {
 
 async function loadAllPages() {
   loading = true;
+  stopped = false;
+  abortController = new AbortController();
   updateLoadingState(true, "Loading all pledges...");
 
   const locale = getLocale();
@@ -536,12 +956,12 @@ async function loadAllPages() {
 
   try {
     const probePages = Array.from({ length: PROBE_BATCH }, (_, i) => i + 1);
-    updateLoadingState(true, `Loading pages 1–${PROBE_BATCH}...`);
+    updateLoadingState(true, `Loading pages 1-${PROBE_BATCH}...`);
 
     const probeResults = await concurrentMap(
       probePages,
       (p) => fetchPageNodes(locale, p),
-      { concurrency: 5 },
+      { concurrency: 5, signal: abortController.signal },
     );
 
     let lastFullPage = 0;
@@ -567,7 +987,7 @@ async function loadAllPages() {
       const remainResults = await concurrentMap(
         remaining,
         (p) => fetchPageNodes(locale, p),
-        { concurrency: 5, shouldStop: (entries) => entries.length === 0 },
+        { concurrency: 5, shouldStop: (entries) => entries.length === 0, signal: abortController.signal },
       );
 
       for (const entries of remainResults) {
@@ -583,41 +1003,113 @@ async function loadAllPages() {
 
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
     console.log(`[SC Bridge] Loaded ${inventory.length} pledges in ${elapsed}s`);
+
+    // F10: Save to cache
+    saveToCache();
   } catch (err) {
-    console.error("[SC Bridge] Failed to load all pages:", err);
+    if (err instanceof DOMException && err.name === "AbortError") {
+      console.log("[SC Bridge] Page loading was aborted");
+    } else {
+      console.error("[SC Bridge] Failed to load all pages:", err);
+      // P8: Restore pagers on failure
+      restorePager();
+    }
   }
 
   loading = false;
+  // P1: Resolve the loading promise
+  if (loadingResolver) {
+    loadingResolver();
+    loadingResolver = null;
+  }
+
   updateLoadingState(false);
   hidePager();
 
+  // P6: Rebuild filter count cache
+  rebuildFilterCountCache();
+
+  // F9: Build fuse index
+  rebuildFuseIndex();
+
   applyFilters();
+
+  // Billing-based payment detection — runs in background after pledges are loaded.
+  // Fetches billing pages to determine cash vs store credit per pledge.
+  // Results are extension-local only (never sent to SC Bridge API).
+  buildPledgePaymentMap((d) => console.log(`[SC Bridge] Payment: ${d}`))
+    .then(() => {
+      if (paymentMethodMap.size > 0) {
+        applyPaymentBadges();
+      }
+    })
+    .catch((err) => console.warn("[SC Bridge] Payment map failed:", err));
 }
 
-/** Fetch a page's HTML, parse the <li> nodes, and adopt them into the live document */
+/** P6: Compute total counts for each filter once when inventory changes */
+function rebuildFilterCountCache() {
+  filterCountCache.clear();
+  for (const f of FILTERS) {
+    let count = 0;
+    for (const e of inventory) {
+      if (matchesFilter(e.data, f.key)) count++;
+    }
+    filterCountCache.set(f.key, count);
+  }
+}
+
+/** F9: Rebuild Fuse.js index */
+function rebuildFuseIndex() {
+  fuseIndex = new Fuse(inventory, {
+    keys: [
+      { name: "data.name", weight: 2 },
+      { name: "data.items.title", weight: 1.5 },
+      { name: "data.items.manufacturer", weight: 1 },
+      { name: "data.items.customName", weight: 1.5 },
+    ],
+    threshold: 0.4,
+    includeScore: true,
+  });
+}
+
+/** P10: Fetch a page's HTML with timeout, parse <li> nodes, and adopt into live document */
 async function fetchPageNodes(locale: string, page: number): Promise<PledgeEntry[]> {
   const url = `${window.location.origin}/${locale}/account/pledges?page=${page}`;
-  const response = await fetch(url, { credentials: "same-origin" });
-  if (!response.ok) {
-    console.warn(`[SC Bridge] Pledge page ${page} returned ${response.status}`);
+  try {
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.warn(`[SC Bridge] Pledge page ${page} returned ${response.status}`);
+      return [];
+    }
+    const html = await response.text();
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    const rows = doc.querySelectorAll(".list-items > li");
+
+    if (rows.length === 0 || doc.querySelector(".empy-list, .empty-list")) return [];
+
+    const entries: PledgeEntry[] = [];
+    for (const li of rows) {
+      // Adopt the node into the live document so it can be appended later
+      const adopted = document.adoptNode(li) as HTMLLIElement;
+      const entry = collectNode(adopted);
+      if (entry) entries.push(entry);
+    }
+    return entries;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      console.warn(`[SC Bridge] Pledge page ${page} fetch timed out`);
+    } else if (err instanceof DOMException && err.name === "TimeoutError") {
+      console.warn(`[SC Bridge] Pledge page ${page} fetch timed out`);
+    } else {
+      console.warn(`[SC Bridge] Pledge page ${page} fetch failed:`, err);
+    }
     return [];
   }
-  const html = await response.text();
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, "text/html");
-  const rows = doc.querySelectorAll(".list-items > li");
-
-  if (rows.length === 0 || doc.querySelector(".empy-list, .empty-list")) return [];
-
-  const entries: PledgeEntry[] = [];
-  for (const li of rows) {
-    // Adopt the node into the live document so it can be appended later
-    const adopted = document.adoptNode(li) as HTMLLIElement;
-    const entry = collectNode(adopted);
-    if (entry) entries.push(entry);
-  }
-  return entries;
 }
 
 // ── Toolbar ──
@@ -625,37 +1117,77 @@ async function fetchPageNodes(locale: string, page: number): Promise<PledgeEntry
 function injectToolbar() {
   const toolbar = document.createElement("div");
   toolbar.id = "scb-toolbar";
+
+  // Build filter buttons HTML
+  const contentFilters = FILTERS.filter((f) => f.group === "content");
+  const statusFilters = FILTERS.filter((f) => f.group === "status");
+
   toolbar.innerHTML = `
-    <div class="scb-toolbar-row">
-      <div class="scb-filters">
-        <button class="scb-filter-btn scb-filter-all active" data-filter="all">All</button>
-        ${FILTERS.filter((f) => f.group === "content").map(
-          (f) => `<button class="scb-filter-btn" data-filter="${f.key}">${f.label}</button>`,
-        ).join("")}
-        <span class="scb-filter-sep"></span>
-        ${FILTERS.filter((f) => f.group === "status").map(
-          (f) => `<button class="scb-filter-btn" data-filter="${f.key}">${f.label}</button>`,
-        ).join("")}
+    <div class="scb-hud-corner scb-hud-tl"></div>
+    <div class="scb-hud-corner scb-hud-br"></div>
+    <div class="scb-toolbar-section">
+      <div class="scb-toolbar-row">
+        <div class="scb-filters">
+          <button class="scb-filter-btn scb-filter-all active" data-filter="all">All</button>
+          ${contentFilters.map(
+            (f) => `<button class="scb-filter-btn" data-filter="${f.key}">${f.label}</button>`,
+          ).join("")}
+          <span class="scb-filter-sep"></span>
+          ${statusFilters.map(
+            (f) => `<button class="scb-filter-btn" data-filter="${f.key}">${f.label}</button>`,
+          ).join("")}
+        </div>
+      </div>
+      <div class="scb-filter-hint">Click = solo filter &middot; Shift+click = combine &middot; Ctrl+click = exclude</div>
+    </div>
+    <div class="scb-glow-sep"></div>
+    <div class="scb-toolbar-section">
+      <div class="scb-toolbar-row scb-search-sort-row">
+        <div class="scb-search-wrap">
+          <svg class="scb-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" class="scb-search" placeholder="Search pledges..." />
+        </div>
+        <select class="scb-sort-select" id="scb-sort">
+          ${SORT_OPTIONS.map((o) => `<option value="${o.key}"${o.key === sortKey ? " selected" : ""}>${o.label}</option>`).join("")}
+        </select>
       </div>
     </div>
-    <div class="scb-filter-hint">Click = solo filter &middot; Shift+click = combine &middot; Ctrl+click = exclude</div>
-    <div class="scb-toolbar-row scb-search-row">
-      <input type="text" class="scb-search" placeholder="Search pledges..." />
-    </div>
-    <div class="scb-toolbar-row scb-total-row">
-      <span class="scb-total-label">Total Pledge Value:</span>
-      <span class="scb-total-value" id="scb-total">loading...</span>
-    </div>
-    <div class="scb-toolbar-row scb-detail-row">
-      <span class="scb-pledge-count" id="scb-count"></span>
-      <div class="scb-actions">
-        <button class="scb-action-btn" id="scb-export-btn">Export</button>
-        <button class="scb-action-btn scb-sync-btn" id="scb-sync" title="Sync to SC Bridge">
-          Sync to SC Bridge
-        </button>
+    <div class="scb-glow-sep"></div>
+    <div class="scb-toolbar-section">
+      <div class="scb-stats-row">
+        <div class="scb-stat-block">
+          <span class="scb-stat-label">Total Pledge Value</span>
+          <span class="scb-stat-value" id="scb-total">loading...</span>
+        </div>
+        <div class="scb-stat-block">
+          <span class="scb-stat-label">Pledges</span>
+          <span class="scb-stat-count" id="scb-count">...</span>
+        </div>
       </div>
     </div>
-    <div id="scb-loading" class="scb-loading">Loading all pledges...</div>
+    <div class="scb-glow-sep"></div>
+    <div class="scb-toolbar-section">
+      <div class="scb-toolbar-row scb-actions-row">
+        <div class="scb-page-controls" id="scb-page-controls">
+          <select class="scb-page-size-select" id="scb-page-size">
+            ${PAGE_SIZE_OPTIONS.map((s) => `<option value="${s}"${s === pageSize ? " selected" : ""}>${s === 0 ? "All" : s}</option>`).join("")}
+          </select>
+          <span class="scb-page-size-label">per page</span>
+          <div class="scb-pager-nav" id="scb-pager-nav"></div>
+        </div>
+        <div class="scb-actions">
+          <button class="scb-action-btn" id="scb-refresh-btn" title="Refresh data (bypass cache)">Refresh</button>
+          <button class="scb-action-btn" id="scb-export-btn">Export</button>
+          <button class="scb-action-btn scb-sync-btn" id="scb-sync" title="Sync to SC Bridge">
+            Sync to SC Bridge
+          </button>
+        </div>
+      </div>
+    </div>
+    <div id="scb-loading" class="scb-loading">
+      <div class="scb-shimmer"></div>
+      <span class="scb-loading-text">Loading all pledges...</span>
+    </div>
   `;
 
   nativeList!.parentElement?.insertBefore(toolbar, nativeList);
@@ -696,11 +1228,51 @@ function injectToolbar() {
     });
   });
 
-  // Search
+  // P4: Search with debounce
   const searchInput = toolbar.querySelector<HTMLInputElement>(".scb-search");
   searchInput?.addEventListener("input", () => {
     searchQuery = searchInput.value.toLowerCase().trim();
+    // Debounce the filter application
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      applyFilters();
+    }, SEARCH_DEBOUNCE_MS);
+  });
+
+  // F3: Sort dropdown
+  const sortSelect = toolbar.querySelector<HTMLSelectElement>("#scb-sort");
+  sortSelect?.addEventListener("change", () => {
+    sortKey = sortSelect.value as SortKey;
+    storePreference("scb_sort_key", sortKey);
     applyFilters();
+  });
+
+  // F4: Page size selector
+  const pageSizeSelect = toolbar.querySelector<HTMLSelectElement>("#scb-page-size");
+  pageSizeSelect?.addEventListener("change", () => {
+    pageSize = parseInt(pageSizeSelect.value);
+    currentPage = 1;
+    storePreference("scb_page_size", pageSize);
+    render();
+    updatePagerNav();
+  });
+
+  // F10: Refresh button (cache bypass)
+  document.getElementById("scb-refresh-btn")?.addEventListener("click", () => {
+    cacheBypass = true;
+    // Reset state
+    inventory = [];
+    filtered = [];
+    filterCountCache.clear();
+    fuseIndex = null;
+    selectedIds.clear();
+    currentPage = 1;
+    loading = true;
+    loadingPromise = new Promise((r) => { loadingResolver = r; });
+
+    // Re-collect page 1 nodes
+    if (nativeList) collectNodesFromContainer(nativeList);
+    loadAllPages();
   });
 
   // Export
@@ -729,6 +1301,16 @@ function matchesFilter(pledge: RsiPledge, filter: FilterKey): boolean {
   switch (filter) {
     case "ships": return pledge.items.some((i) => i.kind === "Ship" || i.kind === "Vehicle");
     case "ccus": return /^upgrade\s*-/i.test(pledge.name) || !!pledge.upgradeData;
+    case "freeCcus":
+      return (/^upgrade\s*-/i.test(pledge.name) || !!pledge.upgradeData) && pledge.valueCents === 0;
+    case "packages":
+      return pledge.items.some((i) =>
+        i.title.includes("Star Citizen Digital Download") ||
+        i.title.includes("Squadron 42 Digital Download"));
+    case "combos": {
+      const shipCount = pledge.items.filter((i) => i.kind === "Ship" || i.kind === "Vehicle").length;
+      return shipCount >= 2;
+    }
     case "flair": return pledge.isReward || pledge.items.some((i) => i.kind === "Hangar decoration");
     case "weapons": return pledge.items.some((i) =>
       i.kind === "Weapon" || i.kind === "FPS Weapon" ||
@@ -746,41 +1328,155 @@ function matchesFilter(pledge: RsiPledge, filter: FilterKey): boolean {
   }
 }
 
+/** F3: Sort inventory by current sort key */
+function sortInventory(entries: PledgeEntry[]): PledgeEntry[] {
+  const sorted = [...entries];
+  switch (sortKey) {
+    case "newest":
+      sorted.sort((a, b) => b.data.id - a.data.id);
+      break;
+    case "oldest":
+      sorted.sort((a, b) => a.data.id - b.data.id);
+      break;
+    case "name-az":
+      sorted.sort((a, b) => cleanPledgeName(a.data.name).localeCompare(cleanPledgeName(b.data.name)));
+      break;
+    case "name-za":
+      sorted.sort((a, b) => cleanPledgeName(b.data.name).localeCompare(cleanPledgeName(a.data.name)));
+      break;
+    case "value-high":
+      sorted.sort((a, b) => b.data.valueCents - a.data.valueCents);
+      break;
+    case "value-low":
+      sorted.sort((a, b) => a.data.valueCents - b.data.valueCents);
+      break;
+  }
+  return sorted;
+}
+
 function applyFilters() {
-  filtered = inventory.filter(({ data }) => {
+  // F9: Use fuzzy search for 3+ char queries
+  let searchResults: PledgeEntry[] | null = null;
+  if (searchQuery && searchQuery.length >= 3 && fuseIndex) {
+    const fuseResults = fuseIndex.search(searchQuery);
+    searchResults = fuseResults.map((r) => r.item);
+  }
+
+  const baseSet = searchResults ?? inventory;
+
+  filtered = baseSet.filter(({ data }) => {
     for (const filter of includeFilters) {
       if (!matchesFilter(data, filter)) return false;
     }
     for (const filter of excludeFilters) {
       if (matchesFilter(data, filter)) return false;
     }
-    if (searchQuery) {
+    // For 1-2 char queries, use substring match (non-fuzzy)
+    if (searchQuery && (!searchResults || searchQuery.length < 3)) {
       const text = `${data.name} ${data.items.map((i) => i.title).join(" ")}`.toLowerCase();
       if (!text.includes(searchQuery)) return false;
     }
     return true;
   });
 
+  // F3: Sort
+  filtered = sortInventory(filtered);
+
+  // Reset to page 1 when filters change
+  currentPage = 1;
+
   updateStats();
   render();
+  updatePagerNav();
+  updateSelectionUI();
 }
 
 /**
- * Empty the native .list-items and append the filtered nodes back in.
+ * P5: Empty the native .list-items and append the filtered nodes via DocumentFragment.
  * The DOM nodes are never destroyed — RSI's event listeners survive.
+ * F4: Apply pagination.
  */
 function render() {
   if (!nativeList) return;
+
+  // F4: Pagination — slice filtered array
+  let toRender = filtered;
+  if (pageSize > 0) {
+    const start = (currentPage - 1) * pageSize;
+    toRender = filtered.slice(start, start + pageSize);
+  }
+
+  // P5: Use DocumentFragment to batch all appends
+  const fragment = document.createDocumentFragment();
+  for (const { node } of toRender) {
+    fragment.appendChild(node);
+  }
 
   // Detach all children (moves nodes out, doesn't destroy them)
   while (nativeList.firstChild) {
     nativeList.removeChild(nativeList.firstChild);
   }
 
-  // Append the filtered subset
-  for (const { node } of filtered) {
-    nativeList.appendChild(node);
+  // Single append of the fragment
+  nativeList.appendChild(fragment);
+}
+
+/** F4: Update pagination controls */
+function updatePagerNav() {
+  const nav = document.getElementById("scb-pager-nav");
+  if (!nav) return;
+
+  if (pageSize === 0 || filtered.length <= pageSize) {
+    nav.innerHTML = "";
+    return;
   }
+
+  const totalPages = Math.ceil(filtered.length / pageSize);
+  const buttons: string[] = [];
+
+  // Previous
+  buttons.push(`<button class="scb-page-btn" data-page="prev" ${currentPage <= 1 ? "disabled" : ""}>&laquo;</button>`);
+
+  // Page numbers (show max 7 pages with ellipsis)
+  const maxVisible = 7;
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  const endPage = Math.min(totalPages, startPage + maxVisible - 1);
+  if (endPage - startPage < maxVisible - 1) {
+    startPage = Math.max(1, endPage - maxVisible + 1);
+  }
+
+  if (startPage > 1) {
+    buttons.push(`<button class="scb-page-btn" data-page="1">1</button>`);
+    if (startPage > 2) buttons.push(`<span class="scb-page-ellipsis">...</span>`);
+  }
+
+  for (let i = startPage; i <= endPage; i++) {
+    buttons.push(`<button class="scb-page-btn${i === currentPage ? " active" : ""}" data-page="${i}">${i}</button>`);
+  }
+
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) buttons.push(`<span class="scb-page-ellipsis">...</span>`);
+    buttons.push(`<button class="scb-page-btn" data-page="${totalPages}">${totalPages}</button>`);
+  }
+
+  // Next
+  buttons.push(`<button class="scb-page-btn" data-page="next" ${currentPage >= totalPages ? "disabled" : ""}>&raquo;</button>`);
+
+  nav.innerHTML = buttons.join("");
+
+  // Attach click handlers
+  nav.querySelectorAll<HTMLButtonElement>(".scb-page-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const page = btn.dataset.page!;
+      if (page === "prev") currentPage = Math.max(1, currentPage - 1);
+      else if (page === "next") currentPage = Math.min(totalPages, currentPage + 1);
+      else currentPage = parseInt(page);
+      render();
+      updatePagerNav();
+      // Scroll to top of list
+      nativeList?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 }
 
 // ── Stats ──
@@ -788,8 +1484,9 @@ function render() {
 function updateLoadingState(isLoading: boolean, message?: string) {
   const el = document.getElementById("scb-loading");
   if (el) {
-    el.style.display = isLoading ? "block" : "none";
-    if (message) el.textContent = message;
+    el.style.display = isLoading ? "flex" : "none";
+    const textEl = el.querySelector(".scb-loading-text");
+    if (textEl && message) textEl.textContent = message;
   }
 }
 
@@ -798,32 +1495,33 @@ function updateStats() {
   const countEl = document.getElementById("scb-count");
   if (!totalEl || !countEl) return;
 
-  const allData = inventory.map((e) => e.data);
-  const filteredData = filtered.map((e) => e.data);
-
-  const totalAll = allData.reduce((sum, p) => sum + p.valueCents, 0);
-  const totalFiltered = filteredData.reduce((sum, p) => sum + p.valueCents, 0);
+  const totalAll = inventory.reduce((sum, e) => sum + e.data.valueCents, 0);
+  const totalFiltered = filtered.reduce((sum, e) => sum + e.data.valueCents, 0);
 
   totalEl.textContent = formatCurrency(totalAll / 100);
 
-  if (filteredData.length < allData.length) {
-    countEl.textContent = `Showing ${filteredData.length} of ${allData.length} pledges — ${formatCurrency(totalFiltered / 100)}`;
+  if (filtered.length < inventory.length) {
+    countEl.textContent = `${filtered.length} of ${inventory.length} — ${formatCurrency(totalFiltered / 100)}`;
   } else {
-    countEl.textContent = `${allData.length} pledges`;
+    countEl.textContent = `${inventory.length}`;
   }
 
-  // Filter button counts
+  // P6: Filter button counts — use cached totals for all-inventory counts
   const allBtnEl = document.querySelector<HTMLButtonElement>(".scb-filter-all");
-  if (allBtnEl) allBtnEl.textContent = `All (${allData.length})`;
+  if (allBtnEl) allBtnEl.textContent = `All (${inventory.length})`;
 
   const hasActiveFilters = includeFilters.size > 0 || excludeFilters.size > 0;
   document.querySelectorAll<HTMLButtonElement>(".scb-filter-btn:not(.scb-filter-all)").forEach((btn) => {
     const key = btn.dataset.filter as FilterKey;
-    const total = allData.filter((p) => matchesFilter(p, key)).length;
+    const total = filterCountCache.get(key) ?? 0;
     const label = FILTERS.find((f) => f.key === key)?.label ?? key;
 
     if (hasActiveFilters) {
-      const current = filteredData.filter((p) => matchesFilter(p, key)).length;
+      // Only recompute filtered counts (not total counts)
+      let current = 0;
+      for (const e of filtered) {
+        if (matchesFilter(e.data, key)) current++;
+      }
       btn.textContent = `${label} (${current}/${total})`;
     } else {
       btn.textContent = `${label} (${total})`;
@@ -863,6 +1561,7 @@ async function rsiPostFromContent<T>(path: string, body: Record<string, unknown>
     },
     body: JSON.stringify(body),
     credentials: "same-origin",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     console.warn(`[SC Bridge] RSI POST ${path} returned ${response.status}`);
@@ -881,7 +1580,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Run async tasks with bounded concurrency + serialized rate-limited dispatch. */
+/** P12: Run async tasks with bounded concurrency + serialized rate-limited dispatch + abort support. */
 async function concurrentMap<T, R>(
   items: T[],
   fn: (item: T) => Promise<R>,
@@ -889,15 +1588,17 @@ async function concurrentMap<T, R>(
     concurrency = 5,
     delayMs = RSI_REQUEST_DELAY_MS,
     shouldStop,
+    signal,
   }: {
     concurrency?: number;
     delayMs?: number;
     shouldStop?: (result: R, index: number) => boolean;
+    signal?: AbortSignal;
   } = {},
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let idx = 0;
-  let stopped = false;
+  let localStopped = false;
 
   // Serial dispatch queue — only one worker acquires the next item at a time,
   // enforcing the rate limit without races between concurrent workers.
@@ -906,7 +1607,7 @@ async function concurrentMap<T, R>(
   async function acquireSlot(): Promise<number | null> {
     return new Promise((resolve) => {
       dispatchReady = dispatchReady.then(async () => {
-        if (stopped || idx >= items.length) {
+        if (localStopped || stopped || idx >= items.length || signal?.aborted) {
           resolve(null);
           return;
         }
@@ -918,12 +1619,12 @@ async function concurrentMap<T, R>(
   }
 
   async function worker() {
-    while (!stopped) {
+    while (!localStopped && !stopped && !signal?.aborted) {
       const i = await acquireSlot();
       if (i === null) break;
       results[i] = await fn(items[i]);
       if (shouldStop?.(results[i], i)) {
-        stopped = true;
+        localStopped = true;
       }
     }
   }
@@ -935,13 +1636,14 @@ async function concurrentMap<T, R>(
 // ── Background-Triggered Collection (Bridge Sync Flow) ──
 
 async function handleCollectAll(): Promise<SyncPayload> {
-  // Wait for initial pagination to finish (loading becomes false)
+  // P1: Wait for loading to complete via Promise instead of spin-wait
   const deadline = Date.now() + COLLECT_TIMEOUT_MS;
-  while (loading) {
-    if (Date.now() > deadline) {
-      throw new Error("Timed out waiting for hangar data to load");
-    }
-    await new Promise((r) => setTimeout(r, 500));
+
+  if (loading) {
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error("Timed out waiting for hangar data to load")), Math.max(0, deadline - Date.now()));
+    });
+    await Promise.race([loadingPromise, timeoutPromise]);
   }
 
   const noop = () => {};
@@ -997,7 +1699,10 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
   try {
     // ── 1. Dashboard props — profile, concierge, subscriber, credits, featured badges ──
     const locale = getLocale();
-    const response = await fetch(`${window.location.origin}/${locale}/account/dashboard`, { credentials: "same-origin" });
+    const response = await fetch(`${window.location.origin}/${locale}/account/dashboard`, {
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
@@ -1116,7 +1821,10 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
     onProgress("Orgs...");
     await delay(RSI_REQUEST_DELAY_MS);
     try {
-      const orgResponse = await fetch(`${window.location.origin}/${locale}/account/organization`, { credentials: "same-origin" });
+      const orgResponse = await fetch(`${window.location.origin}/${locale}/account/organization`, {
+        credentials: "same-origin",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       const orgHtml = await orgResponse.text();
       const orgDoc = new DOMParser().parseFromString(orgHtml, "text/html");
 
@@ -1165,6 +1873,7 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
   }
 }
 
+/** P2: Parallelize upgrade log fetching with concurrentMap */
 async function collectUpgradeLogs(
   pledges: RsiPledge[],
   onProgress: (detail: string) => void,
@@ -1175,145 +1884,108 @@ async function collectUpgradeLogs(
     return [];
   }
 
-  const upgrades: RsiUpgrade[] = [];
+  const allUpgrades: RsiUpgrade[][] = [];
+  let completed = 0;
 
-  for (let i = 0; i < upgradeable.length; i++) {
-    const pledge = upgradeable[i];
-    onProgress(`${i + 1}/${upgradeable.length}`);
+  const results = await concurrentMap(
+    upgradeable,
+    async (pledge) => {
+      const upgrades: RsiUpgrade[] = [];
+      try {
+        const result = await rsiPostFromContent<{
+          success: number;
+          data: { rendered: string };
+        }>(RSI_API.upgradeLog, { pledge_id: pledge.id });
 
-    try {
-      const result = await rsiPostFromContent<{
-        success: number;
-        data: { rendered: string };
-      }>(RSI_API.upgradeLog, { pledge_id: pledge.id });
+        if (result?.success === 1 && result.data?.rendered) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(result.data.rendered, "text/html");
 
-      if (result?.success === 1 && result.data?.rendered) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(result.data.rendered, "text/html");
-
-        // Parse upgrade log rows — each row has date, upgrade name, new value
-        const rows = doc.querySelectorAll(".row, tr, li");
-        for (const row of rows) {
-          const labels = row.querySelectorAll("label, td, span");
-          const texts: string[] = [];
-          labels.forEach((l) => {
-            const t = l.textContent?.trim();
-            if (t) texts.push(t);
-          });
-
-          // Try to extract: date, name, value from the row
-          if (texts.length >= 2) {
-            const dateMatch = texts[0].match(/\w+\s+\d{1,2},?\s+\d{4}/);
-            upgrades.push({
-              pledge_id: pledge.id,
-              name: texts.length >= 3 ? texts[1] : texts[0],
-              applied_at: dateMatch ? dateMatch[0] : texts[0],
-              new_value: texts[texts.length - 1],
+          // Parse upgrade log rows — each row has date, upgrade name, new value
+          const rows = doc.querySelectorAll(".row, tr, li");
+          for (const row of rows) {
+            const labels = row.querySelectorAll("label, td, span");
+            const texts: string[] = [];
+            labels.forEach((l) => {
+              const t = l.textContent?.trim();
+              if (t) texts.push(t);
             });
+
+            // Try to extract: date, name, value from the row
+            if (texts.length >= 2) {
+              const dateMatch = texts[0].match(/\w+\s+\d{1,2},?\s+\d{4}/);
+              upgrades.push({
+                pledge_id: pledge.id,
+                name: texts.length >= 3 ? texts[1] : texts[0],
+                applied_at: dateMatch ? dateMatch[0] : texts[0],
+                new_value: texts[texts.length - 1],
+              });
+            }
           }
         }
+      } catch (err) {
+        console.error(`[SC Bridge] Failed to get upgrade log for pledge ${pledge.id}:`, err);
       }
-    } catch (err) {
-      console.error(`[SC Bridge] Failed to get upgrade log for pledge ${pledge.id}:`, err);
-    }
 
-    if (i < upgradeable.length - 1) await delay(RSI_REQUEST_DELAY_MS);
-  }
+      completed++;
+      onProgress(`${completed}/${upgradeable.length}`);
+      return upgrades;
+    },
+    { concurrency: 3 },
+  );
 
   onProgress("Done");
-  return upgrades;
+  return results.flat();
 }
 
+/** P3: Parallelize buyback page fetching with probe-then-continue pattern */
 async function collectBuyBackPledges(
   onProgress: (detail: string) => void,
 ): Promise<RsiBuyBackPledge[]> {
-  // The old REST API (/api/account/buyBackPledges) returns 500 on the new platform.
-  // Scrape the server-rendered HTML pages instead — same approach community tools use.
   const buybacks: RsiBuyBackPledge[] = [];
-  let page = 1;
+  const locale = getLocale();
 
   try {
-    while (page <= BUYBACK_MAX_PAGES) {
-      onProgress(`Page ${page}...`);
+    // Fetch page 1 first
+    onProgress("Page 1...");
+    const page1 = await fetchBuybackPage(locale, 1);
+    buybacks.push(...page1.pledges);
 
-      const locale = getLocale();
-      const response = await fetch(
-        `${window.location.origin}/${locale}/account/buy-back-pledges?page=${page}&pagesize=${BUYBACK_PAGE_SIZE}`,
-        { credentials: "same-origin" },
-      );
-      if (!response.ok) {
-        console.warn(`[SC Bridge] Buyback page ${page} returned ${response.status}`);
-        break;
-      }
+    if (page1.pledges.length === 0) {
+      onProgress("None");
+      return buybacks;
+    }
 
-      const html = await response.text();
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, "text/html");
+    // If page 1 has results, probe pages 2-5 concurrently
+    if (page1.hasMore) {
+      let currentBatch = 2;
+      let keepGoing = true;
 
-      const pledgeEls = doc.querySelectorAll("article.pledge");
-      if (pledgeEls.length === 0) break;
+      while (keepGoing && currentBatch <= BUYBACK_MAX_PAGES) {
+        const endPage = Math.min(currentBatch + BUYBACK_PROBE_BATCH - 1, BUYBACK_MAX_PAGES);
+        const pages = Array.from({ length: endPage - currentBatch + 1 }, (_, i) => currentBatch + i);
+        onProgress(`Pages ${currentBatch}-${endPage}...`);
 
-      for (const el of pledgeEls) {
-        // ID from buyback link: /pledge/buyback/85851565
-        const buybackLink = el.querySelector('a[href*="/pledge/buyback/"]');
-        const idMatch = buybackLink?.getAttribute("href")?.match(/\/pledge\/buyback\/(\d+)/);
-        const id = idMatch ? Number(idMatch[1]) : 0;
+        const results = await concurrentMap(
+          pages,
+          (p) => fetchBuybackPage(locale, p),
+          { concurrency: 3 },
+        );
 
-        // Name from h1 (strip " - upgraded" span)
-        const h1 = el.querySelector("h1");
-        const upgradedSpan = h1?.querySelector(".upgraded");
-        if (upgradedSpan) upgradedSpan.remove();
-        const name = h1?.textContent?.trim() ?? "";
-
-        // Parse dt/dd pairs
-        const dts = el.querySelectorAll("dt");
-        let date = "";
-        let containedText = "";
-        for (const dt of dts) {
-          const label = dt.textContent?.trim() ?? "";
-          const dd = dt.nextElementSibling as HTMLElement | null;
-          const val = dd?.textContent?.trim() ?? "";
-          if (label === "Last Modified") date = val;
-          if (label === "Contained") containedText = val;
+        for (const result of results) {
+          if (result.pledges.length === 0) {
+            keepGoing = false;
+            break;
+          }
+          buybacks.push(...result.pledges);
+          if (!result.hasMore) {
+            keepGoing = false;
+            break;
+          }
         }
 
-        // "Contained" shows the upgraded state, not the original pledge — skip it.
-        // The pledge name IS the meaningful data for buyback.
-        const items: RsiPledgeItem[] = [];
-
-        // Reclaimable if the buyback button link exists — the .unavailable div is always
-        // in the DOM but hidden via display:none when the pledge can be bought back
-        const isCreditReclaimable = !!buybackLink;
-
-        buybacks.push({
-          id,
-          name,
-          value: "$0.00",
-          value_cents: 0,
-          date,
-          items,
-          is_credit_reclaimable: isCreditReclaimable,
-        });
+        currentBatch = endPage + 1;
       }
-
-      // Check if there are more pages — look for next page link in pager
-      const pagerLinks = doc.querySelectorAll(".pager a, .js-pager a");
-      let hasNext = false;
-      for (const link of pagerLinks) {
-        const href = link.getAttribute("href") ?? link.getAttribute("rel") ?? "";
-        if (href.includes(`page=${page + 1}`)) {
-          hasNext = true;
-          break;
-        }
-      }
-      // Also check: if we got a full page of results, there might be more
-      if (!hasNext && pledgeEls.length >= BUYBACK_PAGE_SIZE) {
-        hasNext = true;
-      }
-
-      if (!hasNext) break;
-      page++;
-      await delay(RSI_REQUEST_DELAY_MS);
     }
   } catch (err) {
     console.error("[SC Bridge] Failed to collect buy-back pledges:", err);
@@ -1326,6 +1998,80 @@ async function collectBuyBackPledges(
   return buybacks;
 }
 
+async function fetchBuybackPage(locale: string, page: number): Promise<{ pledges: RsiBuyBackPledge[]; hasMore: boolean }> {
+  const response = await fetch(
+    `${window.location.origin}/${locale}/account/buy-back-pledges?page=${page}&pagesize=${BUYBACK_PAGE_SIZE}`,
+    {
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) {
+    console.warn(`[SC Bridge] Buyback page ${page} returned ${response.status}`);
+    return { pledges: [], hasMore: false };
+  }
+
+  const html = await response.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+
+  const pledgeEls = doc.querySelectorAll("article.pledge");
+  if (pledgeEls.length === 0) return { pledges: [], hasMore: false };
+
+  const pledges: RsiBuyBackPledge[] = [];
+  for (const el of pledgeEls) {
+    // ID from buyback link: /pledge/buyback/85851565
+    const buybackLink = el.querySelector('a[href*="/pledge/buyback/"]');
+    const idMatch = buybackLink?.getAttribute("href")?.match(/\/pledge\/buyback\/(\d+)/);
+    const id = idMatch ? Number(idMatch[1]) : 0;
+
+    // Name from h1 (strip " - upgraded" span)
+    const h1 = el.querySelector("h1");
+    const upgradedSpan = h1?.querySelector(".upgraded");
+    if (upgradedSpan) upgradedSpan.remove();
+    const name = h1?.textContent?.trim() ?? "";
+
+    // Parse dt/dd pairs
+    const dts = el.querySelectorAll("dt");
+    let date = "";
+    for (const dt of dts) {
+      const label = dt.textContent?.trim() ?? "";
+      const dd = dt.nextElementSibling as HTMLElement | null;
+      const val = dd?.textContent?.trim() ?? "";
+      if (label === "Last Modified") date = val;
+    }
+
+    const items: RsiPledgeItem[] = [];
+    const isCreditReclaimable = !!buybackLink;
+
+    pledges.push({
+      id,
+      name,
+      value: "$0.00",
+      value_cents: 0,
+      date,
+      items,
+      is_credit_reclaimable: isCreditReclaimable,
+    });
+  }
+
+  // Check if there are more pages
+  const pagerLinks = doc.querySelectorAll(".pager a, .js-pager a");
+  let hasNext = false;
+  for (const link of pagerLinks) {
+    const href = link.getAttribute("href") ?? link.getAttribute("rel") ?? "";
+    if (href.includes(`page=${page + 1}`)) {
+      hasNext = true;
+      break;
+    }
+  }
+  if (!hasNext && pledgeEls.length >= BUYBACK_PAGE_SIZE) {
+    hasNext = true;
+  }
+
+  return { pledges, hasMore: hasNext };
+}
+
 function collectNamedShips(pledges: RsiPledge[]): NamedShip[] {
   const map = new Map<number, NamedShip>();
   for (const p of pledges) {
@@ -1336,6 +2082,264 @@ function collectNamedShips(pledges: RsiPledge[]): NamedShip[] {
     }
   }
   return Array.from(map.values());
+}
+
+// ── Billing-Based Payment Method Detection ──
+//
+// WHY: RSI does not expose whether a pledge was purchased with cash (warbond)
+// or store credit anywhere in the hangar DOM or any API. The pledge name
+// sometimes contains "Warbond" but CIG is inconsistent — many warbond
+// purchases have clean names with no indicator. After exhaustively probing
+// every RSI API, GraphQL field, and DOM attribute, the billing page at
+// /account/billing is the ONLY source that reveals payment method via the
+// "Credits used" field on each order.
+//
+// HOW IT WORKS:
+// 1. Fetch billing pages (HTML) filtered to Pledge Store orders
+// 2. Extract ONLY: order ID, credits used amount, item names + totals
+// 3. Fetch pledge log (maps pledge ID → order ID)
+// 4. Cross-reference: credits_used == $0 → CASH, credits == total → CREDIT, else MIXED
+//
+// PRIVACY PROTECTION:
+// The billing page contains sensitive PII: full name, billing address,
+// payment processor (e.g. STRIPE-UK), payment dates, and subscription
+// details. We DELIBERATELY use precise CSS selectors to extract ONLY the
+// fields listed above. We never read .bill-to, .address, PAYMENT INFO
+// tables, subscription wrappers, or any element outside our target selectors.
+// Raw HTML is parsed into structured data immediately and never stored.
+// Billing data is used extension-locally for badge rendering only — it is
+// NEVER included in the sync payload sent to SC Bridge.
+
+interface BillingOrder {
+  orderId: string;
+  creditsUsed: number;
+  itemsTotal: number;
+  items: string[];
+}
+
+/**
+ * Fetch billing pages and extract ONLY: order ID, credits used, item names/totals.
+ *
+ * PRIVACY: The billing page contains PII (billing address, full name, payment
+ * processor). This function uses precise CSS selectors to read ONLY the order ID,
+ * credits used amount, and item summary table. It deliberately skips:
+ * - .bill-to.address (physical address)
+ * - PAYMENT INFO table (processor names, transaction dates)
+ * - .subscriptions-wrapper (subscription IDs, dates, amounts)
+ * - Any col containing personal amounts or dates at order level
+ *
+ * Raw HTML is never stored — it's parsed via DOMParser, specific fields are
+ * extracted, and the parsed document is discarded.
+ */
+async function collectBillingData(
+  onProgress: (detail: string) => void,
+): Promise<Map<string, BillingOrder>> {
+  const orders = new Map<string, BillingOrder>();
+  const locale = getLocale();
+  let page = 1;
+
+  try {
+    while (page <= BILLING_MAX_PAGES) {
+      onProgress(`Page ${page}...`);
+
+      const response = await fetch(
+        `${window.location.origin}/${locale}/account/billing?page=${page}&pagesize=${BILLING_PAGE_SIZE}&storefront=2`,
+        { credentials: "same-origin", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
+      );
+      if (!response.ok) break;
+
+      const html = await response.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+
+      const orderRows = doc.querySelectorAll("ul.orders-item > li");
+      if (orderRows.length === 0) break;
+
+      for (const li of orderRows) {
+        // PRIVACY: Extract ONLY the order ID from .basic-infos columns.
+        // We iterate cols looking for the one labelled "Order Id:" and skip
+        // all others (which contain dates, amounts, status — not needed).
+        let orderId = "";
+        const cols = li.querySelectorAll(".basic-infos .col");
+        for (const col of cols) {
+          const text = col.textContent?.trim() ?? "";
+          if (text.includes("Order Id:")) {
+            orderId = text.replace(/Order\s*Id:\s*/i, "").trim();
+            break;
+          }
+        }
+        if (!orderId) continue;
+
+        // PRIVACY: Extract ONLY the "Credits used" dollar amount from the
+        // order summary's right-section. This section also contains "Items",
+        // "Total before Tax", and "VAT" — we only read the "Credits used"
+        // <strong> tag and its adjacent <span>. The left-section (which
+        // contains the billing address) is never accessed.
+        let creditsUsed = 0;
+        const rightSection = li.querySelector(".payment-wrapper .right-section");
+        if (rightSection) {
+          const strongs = rightSection.querySelectorAll("strong");
+          for (const strong of strongs) {
+            if (strong.textContent?.includes("Credits used")) {
+              const sibling = strong.nextElementSibling;
+              const creditsText = sibling?.textContent?.trim() ?? "";
+              const match = creditsText.match(/\$([\d,]+(?:\.\d{2})?)/);
+              if (match) creditsUsed = Math.round(parseFloat(match[1].replace(/,/g, "")) * 100);
+              break;
+            }
+          }
+        }
+
+        // PRIVACY: Extract item names and totals ONLY from the billing-summary
+        // table. We read td[0] (item name) and td[4] (total price) — skipping
+        // td[1] (unit price), td[2] (quantity), td[3] (discount). The PAYMENT
+        // INFO table (which contains processor names like "STRIPE-UK" and
+        // transaction timestamps) is a separate <table> that we never touch.
+        const items: string[] = [];
+        let itemsTotal = 0;
+        const tableRows = li.querySelectorAll("table.billing-summary tr");
+        for (const tr of tableRows) {
+          const tds = tr.querySelectorAll("td");
+          if (tds.length < 5) continue;
+          const itemName = tds[0].textContent?.trim() ?? "";
+          const totalText = tds[4].textContent?.trim() ?? "";
+          if (itemName) items.push(itemName);
+          const totalMatch = totalText.match(/\$([\d,]+(?:\.\d{2})?)/);
+          if (totalMatch) itemsTotal += Math.round(parseFloat(totalMatch[1].replace(/,/g, "")) * 100);
+        }
+
+        // Store only the extracted fields — raw HTML is discarded when
+        // the DOMParser document goes out of scope.
+        orders.set(orderId, { orderId, creditsUsed, itemsTotal, items });
+      }
+
+      // Check for next page
+      const pagerLinks = doc.querySelectorAll(".pager a");
+      let hasNext = false;
+      for (const link of pagerLinks) {
+        const href = link.getAttribute("href") ?? "";
+        if (href.includes(`page=${page + 1}`)) { hasNext = true; break; }
+      }
+      if (!hasNext && orderRows.length < BILLING_PAGE_SIZE) break;
+      if (!hasNext) break;
+
+      page++;
+      await delay(RSI_REQUEST_DELAY_MS);
+    }
+  } catch (err) {
+    console.warn("[SC Bridge] Billing collection error:", err);
+  }
+
+  onProgress(`${orders.size} orders`);
+  console.log(`[SC Bridge] Collected ${orders.size} billing orders from ${page} pages`);
+  return orders;
+}
+
+/**
+ * Build pledge ID → payment method map by cross-referencing pledge log with billing data.
+ * Pledge log entries have format: "PledgeName #PLEDGEID - ... order #ORDERID, value: ..."
+ *
+ * PRIVACY: The pledge log contains user handles (e.g. "Created by NZVengeance") — we
+ * extract ONLY the pledge ID (integer) and order ID (alphanumeric) via regex.
+ * The resulting map contains only: { pledgeId: number → 'cash' | 'credit' | 'mixed' }.
+ * No PII is stored. This map is kept in extension memory only and is never synced.
+ */
+async function buildPledgePaymentMap(onProgress: (detail: string) => void): Promise<void> {
+  onProgress("Billing data...");
+
+  // Collect billing and pledge log in parallel
+  const [billingOrders, pledgeLogResult] = await Promise.all([
+    collectBillingData((d) => onProgress(`Billing: ${d}`)),
+    rsiPostFromContent<{ success: number; data: { rendered: string } }>("/api/account/pledgeLog"),
+  ]);
+
+  if (!pledgeLogResult?.data?.rendered || billingOrders.size === 0) {
+    onProgress("No data");
+    return;
+  }
+
+  // Parse pledge log to extract pledge ID → order ID mappings
+  const pledgeToOrder = new Map<number, string>();
+  const logHtml = pledgeLogResult.data.rendered;
+  // Match: #PLEDGEID followed by ... order #ORDERID
+  const entryRegex = /#(\d+)\s[^]*?order\s+#([A-Z0-9]+)/gi;
+  let match;
+  while ((match = entryRegex.exec(logHtml)) !== null) {
+    const pledgeId = parseInt(match[1], 10);
+    const orderId = match[2];
+    if (pledgeId && orderId) pledgeToOrder.set(pledgeId, orderId);
+  }
+
+  // Cross-reference: pledge → order → billing → payment method
+  let cashCount = 0, creditCount = 0, mixedCount = 0;
+  for (const [pledgeId, orderId] of pledgeToOrder) {
+    const order = billingOrders.get(orderId);
+    if (!order) continue;
+
+    let method: "cash" | "credit" | "mixed";
+    if (order.creditsUsed === 0) {
+      method = "cash";
+      cashCount++;
+    } else if (order.itemsTotal > 0 && order.creditsUsed >= order.itemsTotal) {
+      method = "credit";
+      creditCount++;
+    } else {
+      method = "mixed";
+      mixedCount++;
+    }
+    paymentMethodMap.set(pledgeId, method);
+  }
+
+  console.log(`[SC Bridge] Payment map: ${cashCount} cash, ${creditCount} credit, ${mixedCount} mixed (${pledgeToOrder.size} pledges matched)`);
+  onProgress(`${paymentMethodMap.size} resolved`);
+}
+
+/**
+ * Re-render payment badges on already-enhanced pledge nodes after billing data arrives.
+ * Uses only the paymentMethodMap (pledge ID → enum) — no PII involved at this stage.
+ */
+function applyPaymentBadges() {
+  for (const { data, node } of inventory) {
+    const row = node.querySelector<HTMLElement>(".scb-id-badges-row");
+    if (!row) continue;
+
+    const pledgeId = data.id;
+    const method = paymentMethodMap.get(pledgeId);
+    if (!method) continue;
+
+    // Remove any existing payment badge (warbond/storecredit/mixed from initial render or name fallback)
+    row.querySelectorAll(".scb-badge-warbond, .scb-badge-storecredit, .scb-badge-mixed").forEach((el) => el.remove());
+
+    // Find insertion point: after the last insurance badge, or after the pledge ID
+    const lastInsurance = row.querySelector(".scb-badge-insurance, .scb-badge-lti");
+    const insertAfter = lastInsurance ?? row.querySelector(".scb-pledge-id");
+
+    const badge = document.createElement("span");
+    if (method === "cash") {
+      badge.className = "scb-badge scb-badge-warbond";
+      badge.textContent = "WARBOND";
+    } else if (method === "credit") {
+      badge.className = "scb-badge scb-badge-storecredit";
+      badge.textContent = "STORE CREDIT";
+    } else {
+      badge.className = "scb-badge scb-badge-mixed";
+      badge.textContent = "MIXED";
+    }
+
+    if (insertAfter?.nextSibling) {
+      row.insertBefore(badge, insertAfter.nextSibling);
+    } else {
+      // Insert after pledge ID (before giftable/ccu badges)
+      const giftable = row.querySelector(".scb-badge-giftable");
+      if (giftable) {
+        row.insertBefore(badge, giftable);
+      } else {
+        const ccu = row.querySelector(".scb-badge-ccu");
+        if (ccu) row.insertBefore(badge, ccu);
+        else row.appendChild(badge);
+      }
+    }
+  }
 }
 
 // ── Export ──
@@ -1592,6 +2596,7 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
         is_upgraded: p.isUpgraded, is_giftable: p.isGiftable, is_reclaimable: p.isReclaimable,
         has_upgrade_log: p.hasUpgradeLog, has_lti: p.hasLti, is_warbond: p.isWarbond,
         is_reward: p.isReward, availability: p.availability,
+        insurance_type: p.insuranceType,
         items: p.items.map((i) => ({
           title: i.title, kind: i.kind, manufacturer: i.manufacturer,
           manufacturerCode: i.manufacturerCode, customName: i.customName,

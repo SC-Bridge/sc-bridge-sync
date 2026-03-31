@@ -7,6 +7,10 @@
 
 import { RSI_BASE, RSI_REQUEST_DELAY_MS } from "./constants";
 
+/** Cooldown: cache a "not logged in" result for 30s to avoid repeated checks */
+const RSI_LOGIN_COOLDOWN_MS = 30_000;
+let rsiLoginFalseUntil = 0;
+
 /** Get the RSI authentication token from the browser cookie jar */
 export async function getRsiToken(): Promise<string | null> {
   const cookie = await browser.cookies.get({
@@ -18,8 +22,21 @@ export async function getRsiToken(): Promise<string | null> {
 
 /** Check whether the user is currently logged into RSI */
 export async function isRsiLoggedIn(): Promise<boolean> {
+  // If we recently determined the user is not logged in, skip re-checking
+  if (Date.now() < rsiLoginFalseUntil) {
+    return false;
+  }
+
   const token = await getRsiToken();
-  return token !== null;
+  if (token !== null) {
+    // Logged in — clear any cooldown
+    rsiLoginFalseUntil = 0;
+    return true;
+  }
+
+  // Not logged in — cache for cooldown period
+  rsiLoginFalseUntil = Date.now() + RSI_LOGIN_COOLDOWN_MS;
+  return false;
 }
 
 /** Make an authenticated POST request to an RSI API endpoint */

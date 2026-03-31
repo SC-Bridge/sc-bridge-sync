@@ -25,27 +25,41 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(
     (message: ExtensionMessage, _sender, sendResponse) => {
       if (message.type === "GET_STATUS") {
-        handleGetStatus().then(sendResponse);
+        handleGetStatus().then(sendResponse).catch((err) => {
+          console.warn("[onMessage] GET_STATUS sendResponse failed:", err);
+        });
         return true; // async response
       }
 
       if (message.type === "GET_RSI_TOKEN") {
-        getRsiToken().then((token) => sendResponse({ token }));
+        getRsiToken().then((token) => sendResponse({ token })).catch((err) => {
+          console.warn("[onMessage] GET_RSI_TOKEN sendResponse failed:", err);
+        });
         return true;
       }
 
       if (message.type === "GET_LAST_PAYLOAD") {
-        getLastPayload().then(sendResponse);
+        getLastPayload().then(sendResponse).catch((err) => {
+          console.warn("[onMessage] GET_LAST_PAYLOAD sendResponse failed:", err);
+        });
         return true;
       }
 
+      // LEGACY: Bridge sync now uses the storage mailbox pattern (bridge.content ↔
+      // hangar.content) to avoid service worker termination during long syncs.
+      // This handler is kept for backwards compatibility with older bridge content
+      // scripts but is no longer the primary sync path.
       if (message.type === "BRIDGE_COLLECT_HANGAR") {
-        handleBridgeCollect().then(sendResponse);
+        handleBridgeCollect().then(sendResponse).catch((err) => {
+          console.warn("[onMessage] BRIDGE_COLLECT_HANGAR sendResponse failed:", err);
+        });
         return true;
       }
 
       if (message.type === "SYNC_SPECTRUM_FRIENDS") {
-        handleSyncSpectrumFriends().then(sendResponse);
+        handleSyncSpectrumFriends().then(sendResponse).catch((err) => {
+          console.warn("[onMessage] SYNC_SPECTRUM_FRIENDS sendResponse failed:", err);
+        });
         return true;
       }
     },
@@ -169,18 +183,16 @@ export default defineBackground(() => {
     { type: "SPECTRUM_FRIENDS_ERROR"; error: string }
   > {
     try {
-      // Check prerequisites
+      // Check prerequisites — cheapest checks first
       const apiBase = await getApiBase();
-      const [rsiOk, scBridgeOk] = await Promise.all([
-        isRsiLoggedIn(),
-        isScBridgeLoggedIn(apiBase),
-      ]);
-
-      if (!rsiOk) {
-        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into RSI" };
-      }
+      const scBridgeOk = await isScBridgeLoggedIn(apiBase);
       if (!scBridgeOk) {
         return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into SC Bridge" };
+      }
+
+      const rsiOk = await isRsiLoggedIn();
+      if (!rsiOk) {
+        return { type: "SPECTRUM_FRIENDS_ERROR", error: "Not logged into RSI" };
       }
 
       // Fetch from Spectrum
@@ -234,11 +246,10 @@ export default defineBackground(() => {
   }
 
 
-  // ── Spectrum Friends Auto-Sync (60s alarm) ──
+  // ── Spectrum Friends Auto-Sync (5 min alarm) ──
 
   // Syncs friends whenever logged into both RSI and SC Bridge.
-  // periodInMinutes minimum is 1 for MV3 — runs every 60s.
-  browser.alarms.create(FRIENDS_ALARM, { periodInMinutes: 1 });
+  browser.alarms.create(FRIENDS_ALARM, { periodInMinutes: 5 });
 
   browser.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== FRIENDS_ALARM) return;
