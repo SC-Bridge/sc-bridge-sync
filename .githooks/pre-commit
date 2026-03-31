@@ -1,21 +1,39 @@
 #!/bin/sh
-# Pre-commit hook: typecheck + validate zip naming convention
+# Pre-commit hook: typecheck + build zips for release
 #
-# Zip assets MUST be named sc-bridge-sync-{browser}.zip (no version numbers).
-# This ensures stable download URLs on GitHub releases:
-#   /releases/latest/download/sc-bridge-sync-chrome.zip
+# On every commit:
+# 1. Typecheck
+# 2. Build all 4 browser zips + sources zip
+# 3. Validate naming convention (sc-bridge-sync-{browser}.zip)
+#
+# The zips in .output/ are gitignored but always kept up-to-date
+# so they're ready for store submission and GitHub releases.
 
-# Typecheck
-npm run typecheck || exit 1
+set -e
 
-# Check for incorrectly named zips being committed
-BAD_ZIPS=$(git diff --cached --name-only | grep -E '\.zip$' | grep -v -E 'sc-bridge-sync-(chrome|firefox|edge|opera)\.zip$' || true)
-if [ -n "$BAD_ZIPS" ]; then
+echo "▸ Typechecking..."
+npm run typecheck
+
+echo "▸ Building zips for all browsers..."
+npm run zip:all
+
+# Validate that expected zips exist with correct names
+EXPECTED="sc-bridge-sync-chrome.zip sc-bridge-sync-firefox.zip sc-bridge-sync-edge.zip sc-bridge-sync-opera.zip sc-bridge-sync-sources.zip"
+MISSING=""
+for zip in $EXPECTED; do
+  if [ ! -f ".output/$zip" ]; then
+    MISSING="$MISSING $zip"
+  fi
+done
+
+if [ -n "$MISSING" ]; then
   echo ""
-  echo "ERROR: Zip files must be named sc-bridge-sync-{browser}.zip"
-  echo "Found incorrectly named zips:"
-  echo "$BAD_ZIPS"
+  echo "ERROR: Missing expected zip files in .output/:"
+  echo " $MISSING"
   echo ""
-  echo "Use 'npm run zip:all' to build correctly named zips."
+  echo "zip:all should have created these. Check for build errors above."
   exit 1
 fi
+
+echo "▸ All 5 zips verified in .output/"
+echo "  $(ls -1 .output/*.zip | xargs -I{} basename {})"
