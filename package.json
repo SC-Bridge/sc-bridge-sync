@@ -15,7 +15,11 @@
     "zip:edge": "wxt zip -b edge",
     "zip:opera": "wxt zip -b opera",
     "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge && npm run zip:opera && node scripts/rename-zips.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major"
   },
   "keywords": [
     "star-citizen",
