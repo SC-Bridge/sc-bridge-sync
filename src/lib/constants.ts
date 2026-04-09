@@ -73,8 +73,8 @@ export const RSI_API = {
   spectrumIdentify: "/api/spectrum/auth/identify",
 } as const;
 
-/** Delay between RSI API requests (ms) — be respectful */
-export const RSI_REQUEST_DELAY_MS = 400;
+/** Delay between RSI API requests (ms) — 429 retry logic acts as safety net */
+export const RSI_REQUEST_DELAY_MS = 50;
 
 /** Extension storage keys */
 export const STORAGE_KEYS = {

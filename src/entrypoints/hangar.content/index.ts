@@ -950,48 +950,28 @@ async function loadAllPages() {
 
   const locale = getLocale();
   const t0 = performance.now();
+  console.log('[SC Bridge] Page fetch started');
 
-  // Track which IDs we already have from page 1
+  // Track which IDs we already have from page 1 (collected from DOM)
   const existingIds = new Set(inventory.map((e) => e.data.id));
 
   try {
-    const probePages = Array.from({ length: PROBE_BATCH }, (_, i) => i + 1);
-    updateLoadingState(true, `Loading pages 1-${PROBE_BATCH}...`);
+    // Discover exact page count from RSI pagination before fetching
+    const totalPages = await fetchTotalPages(locale);
 
-    const probeResults = await concurrentMap(
-      probePages,
-      (p) => fetchPageNodes(locale, p),
-      { concurrency: 5, signal: abortController.signal },
-    );
+    if (totalPages > 1) {
+      // Pages 2-N: page 1 is already in the DOM inventory
+      const pages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+      updateLoadingState(true, `Loading ${totalPages} pages...`);
 
-    let lastFullPage = 0;
-    for (let i = 0; i < probeResults.length; i++) {
-      const entries = probeResults[i];
-      if (entries.length === 0) break;
-      for (const entry of entries) {
-        if (!existingIds.has(entry.data.id)) {
-          existingIds.add(entry.data.id);
-          inventory.push(entry);
-        }
-      }
-      if (entries.length === 10) lastFullPage = i + 1;
-    }
-
-    if (lastFullPage === PROBE_BATCH) {
-      const remaining = Array.from(
-        { length: MAX_PAGES - PROBE_BATCH },
-        (_, i) => PROBE_BATCH + 1 + i,
-      );
-      updateLoadingState(true, `Loading remaining pages...`);
-
-      const remainResults = await concurrentMap(
-        remaining,
+      const results = await concurrentMap(
+        pages,
         (p) => fetchPageNodes(locale, p),
-        { concurrency: 5, shouldStop: (entries) => entries.length === 0, signal: abortController.signal },
+        { concurrency: 20, signal: abortController.signal },
       );
 
-      for (const entries of remainResults) {
-        if (entries.length === 0) break;
+      for (const entries of results) {
+        if (!entries || entries.length === 0) continue;
         for (const entry of entries) {
           if (!existingIds.has(entry.data.id)) {
             existingIds.add(entry.data.id);
@@ -1001,8 +981,9 @@ async function loadAllPages() {
       }
     }
 
-    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-    console.log(`[SC Bridge] Loaded ${inventory.length} pledges in ${elapsed}s`);
+    const elapsed = Math.round(performance.now() - t0);
+    console.log(`[SC Bridge] Page fetch completed in ${elapsed}ms`);
+    console.log(`[SC Bridge] Loaded ${inventory.length} pledges in ${(elapsed / 1000).toFixed(1)}s`);
 
     // F10: Save to cache
     saveToCache();
@@ -1070,6 +1051,37 @@ function rebuildFuseIndex() {
     threshold: 0.4,
     includeScore: true,
   });
+}
+
+/** Fetch page 1 and parse RSI's pagination links to discover the total number of pledge pages. */
+async function fetchTotalPages(locale: string): Promise<number> {
+  const url = `${window.location.origin}/${locale}/account/pledges?page=1`;
+  try {
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.warn(`[SC Bridge] fetchTotalPages: page 1 returned ${response.status}, falling back to MAX_PAGES`);
+      return MAX_PAGES;
+    }
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const pageLinks = doc.querySelectorAll<HTMLAnchorElement>('a[href*="page="]');
+    let lastPage = 1;
+    for (const link of pageLinks) {
+      const match = link.href.match(/[?&]page=(\d+)/);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (n > lastPage) lastPage = n;
+      }
+    }
+    console.log(`[SC Bridge] Pagination discovered: ${lastPage} total pages`);
+    return lastPage;
+  } catch (err) {
+    console.warn(`[SC Bridge] fetchTotalPages failed, falling back to MAX_PAGES:`, err);
+    return MAX_PAGES;
+  }
 }
 
 /** P10: Fetch a page's HTML with timeout, parse <li> nodes, and adopt into live document */
