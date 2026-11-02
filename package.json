@@ -16,6 +16,7 @@
     "zip:opera": "wxt zip -b opera",
     "zip:all": "npm run zip && npm run zip:firefox && npm run zip:edge && npm run zip:opera && node scripts/rename-zips.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "release": "node scripts/release.mjs",
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",
@@ -34,6 +35,7 @@
     "wxt": "^0.20.18"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
   }
 }

@@ -635,6 +635,11 @@
   border-color: #ffffff1f;
   background: var(--scb-glass-hover);
 }
+
+.scb-export-toggle:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .scb-export-toggle input {
   margin-top: 2px;
   accent-color: var(--scb-accent);
