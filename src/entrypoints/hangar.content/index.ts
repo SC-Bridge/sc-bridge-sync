@@ -13,7 +13,7 @@ import "./style.css";
 import Fuse from "fuse.js";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
 import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase, type PrivacyMode } from "@/lib/constants";
-import { csvEscape, downloadFile } from "@/lib/export";
+import { downloadFile, pledgeShipNames, shipItems, toFlatCsv } from "@/lib/export";
 import { getPrivacyMode, getStealthPercent } from "@/lib/storage";
 
 // ── Filter Types ──
@@ -458,12 +458,9 @@ function enhancePledgeNode(li: HTMLLIElement, pledge: RsiPledge) {
     .replace(/^Upgrade\s*-\s*/i, "CCU: ");
 
   // For ship pledges, show the actual ship name(s) (handles CCU'd ships + multi-ship packs)
-  const ships = pledge.items.filter((i) => i.kind === "Ship" || i.kind === "Vehicle");
-  const ship = ships[0] ?? null;
-  if (ships.length > 0 && !displayName.startsWith("CCU:")) {
-    const shipNames = ships.map((s) =>
-      s.customName ? `${s.customName} (${s.title})` : s.title,
-    );
+  const ship = shipItems(pledge)[0] ?? null;
+  const shipNames = pledgeShipNames(pledge);
+  if (shipNames.length > 0 && !displayName.startsWith("CCU:")) {
     displayName = shipNames.join(" / ");
   }
 
@@ -2356,6 +2353,9 @@ function applyPaymentBadges() {
 
 // ── Export ──
 
+/** Categories that fit the flat CSV grid; the rest export as JSON only. */
+const CSV_CATEGORIES = new Set(["fleet", "buyback"]);
+
 function showExportModal() {
   document.getElementById("scb-export-modal")?.remove();
 
@@ -2366,10 +2366,10 @@ function showExportModal() {
     .filter(([key]) => key !== "spectrumFriends")
     .map(([key, cat]) => `
     <label class="scb-export-toggle">
-      <input type="checkbox" data-cat="${key}" checked />
+      <input type="checkbox" data-cat="${key}" ${CSV_CATEGORIES.has(key) ? "" : 'data-json-only="1"'} checked />
       <span class="scb-export-toggle-info">
         <span class="scb-export-toggle-label">${cat.label}</span>
-        <span class="scb-export-toggle-desc">${cat.description}</span>
+        <span class="scb-export-toggle-desc">${cat.description}${CSV_CATEGORIES.has(key) ? "" : " (JSON only)"}</span>
       </span>
     </label>
   `).join("");
@@ -2400,7 +2400,7 @@ function showExportModal() {
             <label class="scb-export-format">
               <input type="radio" name="scb-format" value="csv" />
               <span>CSV</span>
-              <span class="scb-export-format-desc">Flat, one row per pledge</span>
+              <span class="scb-export-format-desc">Flat table, one row per item &mdash; pledges &amp; buy-backs</span>
             </label>
           </div>
         </div>
@@ -2430,10 +2430,21 @@ function showExportModal() {
   overlay.querySelector("#scb-export-cancel")?.addEventListener("click", close);
   document.addEventListener("keydown", escapeHandler);
 
+  // CSV can only hold the per-item grid — grey out the JSON-only categories
+  const syncJsonOnlyToggles = () => {
+    const isCsv = (overlay.querySelector('input[name="scb-format"]:checked') as HTMLInputElement)?.value === "csv";
+    overlay.querySelectorAll<HTMLInputElement>("input[data-cat][data-json-only]").forEach((cb) => {
+      cb.disabled = isCsv;
+    });
+  };
+  overlay.querySelectorAll<HTMLInputElement>('input[name="scb-format"]').forEach((r) => {
+    r.addEventListener("change", syncJsonOnlyToggles);
+  });
+
   overlay.querySelector("#scb-export-go")?.addEventListener("click", () => {
     const cats: Record<string, boolean> = {};
     overlay.querySelectorAll<HTMLInputElement>("input[data-cat]").forEach((cb) => {
-      cats[cb.dataset.cat!] = cb.checked;
+      cats[cb.dataset.cat!] = cb.checked && !cb.disabled;
     });
     const format = (overlay.querySelector('input[name="scb-format"]:checked') as HTMLInputElement)?.value ?? "json";
 
@@ -2603,7 +2614,7 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
 
     if (categories.fleet !== false) {
       jsonData.pledges = data.map((p) => ({
-        id: p.id, name: p.name, value: p.value, valueCents: p.valueCents,
+        id: p.id, name: p.name, ships: pledgeShipNames(p), value: p.value, valueCents: p.valueCents,
         configurationValue: p.configurationValue, currency: p.currency, date: p.date,
         is_upgraded: p.isUpgraded, is_giftable: p.isGiftable, is_reclaimable: p.isReclaimable,
         has_upgrade_log: p.hasUpgradeLog, has_lti: p.hasLti, is_warbond: p.isWarbond,
@@ -2647,99 +2658,11 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
 
     downloadFile(JSON.stringify(jsonData, null, 2), `sc-bridge-hangar-${timestamp}.json`, "application/json");
   } else {
-    // CSV — multiple sections
-    const rows: string[] = [];
-
-    if (categories.fleet !== false) {
-      rows.push("# Pledges");
-      rows.push("id,name,value,currency,date,lti,warbond,giftable,meltable,upgraded,has_upgrade_log,availability,items");
-      for (const p of data) {
-        rows.push([
-          p.id, csvEscape(p.name), (p.valueCents / 100).toFixed(2), csvEscape(p.currency),
-          csvEscape(p.date), p.hasLti, p.isWarbond, p.isGiftable, p.isReclaimable,
-          p.isUpgraded, p.hasUpgradeLog, csvEscape(p.availability),
-          csvEscape(p.items.map((i) => i.title).join("; ")),
-        ].join(","));
-      }
-    }
-
-    if (categories.buyback !== false && buybackPledges.length > 0) {
-      if (rows.length > 0) rows.push("");
-      rows.push("# Buy-Back Pledges");
-      rows.push("id,name,value,date,items,is_credit_reclaimable,token_cost");
-      for (const b of buybackPledges) {
-        rows.push([
-          b.id, csvEscape(b.name), csvEscape(b.value), csvEscape(b.date),
-          csvEscape(b.items.map((i) => i.title).join("; ")),
-          b.is_credit_reclaimable, b.token_cost ?? "",
-        ].join(","));
-      }
-    }
-
-    if (categories.upgrades !== false && upgradeEntries.length > 0) {
-      if (rows.length > 0) rows.push("");
-      rows.push("# Upgrade Logs");
-      rows.push("pledge_id,name,applied_at,new_value");
-      for (const u of upgradeEntries) {
-        rows.push([
-          u.pledge_id, csvEscape(u.name), csvEscape(u.applied_at), csvEscape(u.new_value),
-        ].join(","));
-      }
-    }
-
-    if (categories.account !== false && account) {
-      if (rows.length > 0) rows.push("");
-      rows.push("# Account Info");
-      rows.push("field,value");
-      rows.push(`nickname,${csvEscape(account.nickname)}`);
-      rows.push(`displayname,${csvEscape(account.displayname)}`);
-      if (account.avatar_url) rows.push(`avatar_url,${csvEscape(account.avatar_url)}`);
-      if (account.enlisted_since) rows.push(`enlisted_since,${csvEscape(account.enlisted_since)}`);
-      if (account.country) rows.push(`country,${csvEscape(account.country)}`);
-      if (account.concierge_level) rows.push(`concierge_level,${csvEscape(account.concierge_level)}`);
-      if (account.concierge_next_level) rows.push(`concierge_next_level,${csvEscape(account.concierge_next_level)}`);
-      if (account.concierge_progress != null) rows.push(`concierge_progress,${account.concierge_progress}%`);
-      if (account.subscriber_type) rows.push(`subscriber_type,${csvEscape(account.subscriber_type)}`);
-      if (account.subscriber_frequency) rows.push(`subscriber_frequency,${csvEscape(account.subscriber_frequency)}`);
-      if (account.store_credit_cents != null) rows.push(`store_credit,$${(account.store_credit_cents / 100).toFixed(2)}`);
-      if (account.uec_balance != null) rows.push(`uec_balance,${account.uec_balance}`);
-      if (account.rec_balance != null) rows.push(`rec_balance,${account.rec_balance}`);
-      if (account.has_game_package != null) rows.push(`has_game_package,${account.has_game_package}`);
-      if (account.referral_code) rows.push(`referral_code,${csvEscape(account.referral_code)}`);
-      if (account.orgs?.length) {
-        for (const o of account.orgs) {
-          const parts = [`${csvEscape(o.name)} [${o.sid}]`];
-          if (o.rank) parts.push(`rank: ${o.rank}`);
-          if (o.members) parts.push(o.members);
-          if (o.is_primary) parts.push("*main*");
-          rows.push(`org,${csvEscape(parts.join(" | "))}`);
-        }
-      } else if (account.org) {
-        rows.push(`org,${csvEscape(account.org.name)} [${account.org.sid}]${account.org.rank ? ` (${account.org.rank})` : ""} *main*`);
-      }
-      if (account.featured_badges?.length) {
-        for (const b of account.featured_badges) {
-          rows.push(`featured_badge,${csvEscape(b.title)}`);
-        }
-      }
-      if (account.all_badges) {
-        const badgeNames = Object.values(account.all_badges).sort();
-        rows.push(`badge_count,${badgeNames.length}`);
-        rows.push(`badges,${csvEscape(badgeNames.join("; "))}`);
-      }
-    }
-
-    if (categories.shipNames !== false && namedShips.length > 0) {
-      if (rows.length > 0) rows.push("");
-      rows.push("# Named Ships");
-      rows.push("membership_id,default_name,custom_name");
-      for (const s of namedShips) {
-        rows.push([s.membership_id, csvEscape(s.default_name), csvEscape(s.custom_name)].join(","));
-      }
-    }
-
-    if (rows.length === 0) return;
-    downloadFile(rows.join("\n"), `sc-bridge-hangar-${timestamp}.csv`, "text/csv");
+    // CSV — one flat grid of pledges + buy-backs; the other categories are JSON-only
+    const pledges = categories.fleet !== false ? data : [];
+    const buybacks = categories.buyback !== false ? buybackPledges : [];
+    if (pledges.length === 0 && buybacks.length === 0) return;
+    downloadFile(toFlatCsv({ pledges, buybackPledges: buybacks }), `sc-bridge-hangar-${timestamp}.csv`, "text/csv");
   }
 }
 

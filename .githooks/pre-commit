@@ -3,8 +3,9 @@
 #
 # On every commit:
 # 1. Typecheck
-# 2. Build all 4 browser zips + sources zip
-# 3. Validate naming convention (sc-bridge-sync-{browser}.zip)
+# 2. Unit tests (vitest)
+# 3. Build all 4 browser zips + sources zip
+# 4. Validate naming convention (sc-bridge-sync-{browser}.zip)
 #
 # The zips in .output/ are gitignored but always kept up-to-date
 # so they're ready for store submission and GitHub releases.
@@ -13,6 +14,9 @@ set -e
 
 echo "▸ Typechecking..."
 npm run typecheck
+
+echo "▸ Running tests..."
+npm test
 
 echo "▸ Building zips for all browsers..."
 npm run zip:all
