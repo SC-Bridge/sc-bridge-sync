@@ -18,6 +18,34 @@ const ZIP_ASSETS = [
   ["Sources", "sc-bridge-sync-sources.zip", "full source for store review submissions"],
 ];
 
+const BUMP_KINDS = ["patch", "minor", "major"];
+
+/** Next semver for a bump kind; lower parts reset to 0. */
+export function bumpVersion(version, kind) {
+  if (!BUMP_KINDS.includes(kind)) {
+    throw new Error(`Unknown bump "${kind}" — expected patch|minor|major`);
+  }
+  const [major, minor, patch] = version.split(".").map(Number);
+  if (kind === "major") return `${major + 1}.0.0`;
+  if (kind === "minor") return `${major}.${minor + 1}.0`;
+  return `${major}.${minor}.${patch + 1}`;
+}
+
+/** Branch the version bump travels on before it reaches main through a PR. */
+export function releaseBranch(version) {
+  return `release/v${version}`;
+}
+
+/** What to tell the operator when the release PR could not be merged automatically. */
+export function resumeHint(version, prUrl) {
+  return [
+    `The release PR for v${version} is open but could not be merged automatically:`,
+    `  ${prUrl}`,
+    `Merge it (merge commit), then finish the release with:`,
+    `  npm run release:publish`,
+  ].join("\n");
+}
+
 /** Run git with an argument list (never a shell string) and return trimmed stdout. */
 export function git(args) {
   return execFileSync("git", args, { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();

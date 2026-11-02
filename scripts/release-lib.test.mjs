@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReleaseNotes, commitsBetween, previousTag } from "./release-lib.mjs";
+import { buildReleaseNotes, bumpVersion, commitsBetween, previousTag, releaseBranch, resumeHint } from "./release-lib.mjs";
 
 // These run real git against this checkout. Tags v0.6.0 and v0.6.1 exist on
 // main; the v0.6.1 release shipped with an empty commit list because the
@@ -39,5 +39,32 @@ describe("buildReleaseNotes", () => {
     const notes = buildReleaseNotes("1.2.3", []);
     expect(notes).not.toContain("- \n");
     expect(notes).toContain("(first release)");
+  });
+});
+
+describe("bumpVersion", () => {
+  it("bumps patch, minor and major, resetting the lower parts", () => {
+    expect(bumpVersion("0.6.1", "patch")).toBe("0.6.2");
+    expect(bumpVersion("0.6.1", "minor")).toBe("0.7.0");
+    expect(bumpVersion("0.6.1", "major")).toBe("1.0.0");
+  });
+
+  it("rejects an unknown bump kind", () => {
+    expect(() => bumpVersion("0.6.1", "huge")).toThrow(/patch\|minor\|major/);
+  });
+});
+
+describe("releaseBranch", () => {
+  it("names the release branch after the new version", () => {
+    expect(releaseBranch("0.6.2")).toBe("release/v0.6.2");
+  });
+});
+
+describe("resumeHint", () => {
+  it("tells the operator to merge the PR and run release:publish", () => {
+    const hint = resumeHint("0.6.2", "https://github.com/SC-Bridge/sc-bridge-sync/pull/99");
+    expect(hint).toContain("https://github.com/SC-Bridge/sc-bridge-sync/pull/99");
+    expect(hint).toContain("npm run release:publish");
+    expect(hint).toContain("0.6.2");
   });
 });
