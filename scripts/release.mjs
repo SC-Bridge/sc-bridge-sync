@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync, readdirSync, unlinkSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { buildReleaseNotes, commitsBetween, previousTag } from "./release-lib.mjs";
 
 const ROOT = join(import.meta.dirname, "..");
 const PKG_PATH = join(ROOT, "package.json");
@@ -28,10 +29,6 @@ const OUTPUT_DIR = join(ROOT, ".output");
 function run(cmd, opts = {}) {
   console.log(`  $ ${cmd}`);
   return execSync(cmd, { cwd: ROOT, stdio: "inherit", ...opts });
-}
-
-function runCapture(cmd) {
-  return execSync(cmd, { cwd: ROOT, encoding: "utf-8" }).trim();
 }
 
 // --- Parse args ---
@@ -112,34 +109,13 @@ console.log(`\n▸ Creating GitHub release...`);
 const assets = EXPECTED.map((z) => `.output/${z}`).join(" ");
 const title = `v${newVersion}`;
 
-// Build release notes from git log since last tag
-let prevTag;
-try {
-  prevTag = runCapture(`git describe --tags --abbrev=0 v${newVersion}^`);
-} catch {
-  prevTag = null;
-}
-const logRange = prevTag ? `${prevTag}..v${newVersion}` : `v${newVersion}`;
-let commits;
-try {
-  commits = runCapture(`git log ${logRange} --oneline --no-decorate`);
-} catch {
-  commits = "(first release)";
-}
+// Build release notes from git log since last tag (helpers are unit-tested in release-lib.test.mjs)
+const notes = buildReleaseNotes(newVersion, commitsBetween(previousTag(`v${newVersion}`), `v${newVersion}`));
 
-const notes = `## SC Bridge Sync v${newVersion}
-
-### Commits
-${commits.split("\n").map((l) => `- ${l}`).join("\n")}
-
-## Downloads
-- **Chrome**: \`sc-bridge-sync-chrome.zip\` — load unpacked at \`chrome://extensions\`
-- **Edge**: \`sc-bridge-sync-edge.zip\` — load unpacked at \`edge://extensions\`
-- **Firefox**: \`sc-bridge-sync-firefox.zip\` — load temporary at \`about:debugging#/runtime/this-firefox\`
-- **Opera**: \`sc-bridge-sync-opera.zip\` — load unpacked at \`opera://extensions\`
-- **Sources**: \`sc-bridge-sync-sources.zip\` — full source for store review submissions`;
-
-run(`gh release create v${newVersion} ${assets} --repo SC-Bridge/sc-bridge-sync --title "${title}" --notes "${notes.replace(/"/g, '\\"')}"`);
+// Notes go through a file: a quoted multi-line string via cmd.exe breaks on %, &, ^ and quotes
+const notesPath = join(OUTPUT_DIR, "release-notes.md");
+writeFileSync(notesPath, notes + "\n");
+run(`gh release create v${newVersion} ${assets} --repo SC-Bridge/sc-bridge-sync --title "${title}" --notes-file "${notesPath}"`);
 
 console.log(`\n✓ Released v${newVersion}`);
 console.log(`  https://github.com/SC-Bridge/sc-bridge-sync/releases/tag/v${newVersion}`);
