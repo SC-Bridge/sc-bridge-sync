@@ -165,9 +165,13 @@ function getLocale(): string {
   return match ? match[1] : "en";
 }
 
-/** P8: Hide RSI's native pagination controls (display: none instead of remove) */
+/**
+ * P8: Hide RSI's native pagination controls (display: none instead of remove).
+ * RSI's current markup is `.pager` (top and bottom of the list); its links are full
+ * page loads to ?page=N, which wipe the extension's filtered view if clicked.
+ */
 function hidePager() {
-  document.querySelectorAll<HTMLElement>(".js-pager, .pager-container, .pagination").forEach((el) => {
+  document.querySelectorAll<HTMLElement>(".js-pager, .pager-container, .pagination, .pager").forEach((el) => {
     el.style.display = "none";
     el.dataset.scbHidden = "1";
   });
