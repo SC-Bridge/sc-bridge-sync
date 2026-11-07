@@ -1766,7 +1766,8 @@ async function collectAccountInfo(onProgress: (detail: string) => void): Promise
     if (Array.isArray(creditsArr)) {
       for (const c of creditsArr) {
         if (c.variant === "store" && c.value != null) {
-          info.store_credit_cents = Math.round(Number(c.value) * 100);
+          // RSI already reports store credit in cents ($77.95 arrives as 7795).
+          info.store_credit_cents = Math.round(Number(c.value));
         } else if (c.variant === "uec" && c.value != null) {
           info.uec_balance = Number(c.value);
         } else if (c.variant === "rec" && c.value != null) {
@@ -2648,6 +2649,8 @@ function runExport(format: "json" | "csv", categories: Record<string, boolean>, 
 
     jsonData.export_meta = {
       exported_at: new Date().toISOString(),
+      // Lets readers tell exports made before the store-credit cents fix (no version) from fixed ones.
+      extension_version: browser.runtime.getManifest().version,
       pledge_count: data.length,
       buyback_count: buybackPledges.length,
       upgrade_log_count: upgradeEntries.length,
