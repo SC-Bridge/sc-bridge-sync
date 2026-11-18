@@ -10,10 +10,10 @@
  */
 
 import "./style.css";
-import Fuse from "fuse.js";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
 import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase, type PrivacyMode } from "@/lib/constants";
 import { downloadFile, pledgeShipNames, shipItems, toFlatCsv } from "@/lib/export";
+import { createPledgeSearch } from "@/lib/hangar-search";
 import { getPrivacyMode, getStealthPercent } from "@/lib/storage";
 
 // ── Filter Types ──
@@ -148,8 +148,8 @@ let currentPage: number = 1;
 let selectedIds = new Set<number>();
 let lastClickedIndex: number | null = null;
 
-// F9: Fuse index for fuzzy search
-let fuseIndex: Fuse<PledgeEntry> | null = null;
+// F9: Search over the loaded inventory (substring match, fuzzy typo fallback)
+let pledgeSearch: ((query: string) => PledgeEntry[]) | null = null;
 
 // F10: Cache state
 let cacheBypass = false;
@@ -286,7 +286,7 @@ function tryInit(): boolean {
     selectedIds.clear();
     lastClickedIndex = null;
     filterCountCache.clear();
-    fuseIndex = null;
+    pledgeSearch = null;
     currentPage = 1;
     loading = true;
     stopped = false;
@@ -334,11 +334,27 @@ function tryInit(): boolean {
 async function loadStoredPreferences() {
   try {
     const result = await browser.storage.local.get(["scb_sort_key", "scb_page_size"]);
-    if (result.scb_sort_key) sortKey = result.scb_sort_key as SortKey;
-    if (result.scb_page_size != null) pageSize = result.scb_page_size as number;
+    const storedSort = SORT_OPTIONS.find((o) => o.key === result.scb_sort_key);
+    if (storedSort) sortKey = storedSort.key;
+    const storedPageSize = PAGE_SIZE_OPTIONS.find((s) => s === result.scb_page_size);
+    if (storedPageSize != null) pageSize = storedPageSize;
   } catch {
     // ignore
   }
+  syncPreferenceControls();
+}
+
+/**
+ * Stored preferences arrive after the toolbar is injected, so the dropdowns
+ * are rendered with the defaults. Point them at the values actually in use,
+ * otherwise the list is sorted one way while the dropdown claims another.
+ */
+function syncPreferenceControls() {
+  const sortSelect = document.querySelector<HTMLSelectElement>("#scb-sort");
+  if (sortSelect) sortSelect.value = sortKey;
+  const pageSizeSelect = document.querySelector<HTMLSelectElement>("#scb-page-size");
+  if (pageSizeSelect) pageSizeSelect.value = String(pageSize);
+  if (!loading) applyFilters();
 }
 
 async function storePreference(key: string, value: unknown) {
@@ -1011,8 +1027,8 @@ async function loadAllPages() {
   // P6: Rebuild filter count cache
   rebuildFilterCountCache();
 
-  // F9: Build fuse index
-  rebuildFuseIndex();
+  // F9: Build search index
+  pledgeSearch = createPledgeSearch(inventory);
 
   applyFilters();
 
@@ -1038,20 +1054,6 @@ function rebuildFilterCountCache() {
     }
     filterCountCache.set(f.key, count);
   }
-}
-
-/** F9: Rebuild Fuse.js index */
-function rebuildFuseIndex() {
-  fuseIndex = new Fuse(inventory, {
-    keys: [
-      { name: "data.name", weight: 2 },
-      { name: "data.items.title", weight: 1.5 },
-      { name: "data.items.manufacturer", weight: 1 },
-      { name: "data.items.customName", weight: 1.5 },
-    ],
-    threshold: 0.4,
-    includeScore: true,
-  });
 }
 
 /** Fetch page 1 and parse RSI's pagination links to discover the total number of pledge pages. */
@@ -1277,7 +1279,7 @@ function injectToolbar() {
     inventory = [];
     filtered = [];
     filterCountCache.clear();
-    fuseIndex = null;
+    pledgeSearch = null;
     selectedIds.clear();
     currentPage = 1;
     loading = true;
@@ -1368,14 +1370,7 @@ function sortInventory(entries: PledgeEntry[]): PledgeEntry[] {
 }
 
 function applyFilters() {
-  // F9: Use fuzzy search for 3+ char queries
-  let searchResults: PledgeEntry[] | null = null;
-  if (searchQuery && searchQuery.length >= 3 && fuseIndex) {
-    const fuseResults = fuseIndex.search(searchQuery);
-    searchResults = fuseResults.map((r) => r.item);
-  }
-
-  const baseSet = searchResults ?? inventory;
+  const baseSet = searchQuery ? (pledgeSearch ?? createPledgeSearch(inventory))(searchQuery) : inventory;
 
   filtered = baseSet.filter(({ data }) => {
     for (const filter of includeFilters) {
@@ -1383,11 +1378,6 @@ function applyFilters() {
     }
     for (const filter of excludeFilters) {
       if (matchesFilter(data, filter)) return false;
-    }
-    // For 1-2 char queries, use substring match (non-fuzzy)
-    if (searchQuery && (!searchResults || searchQuery.length < 3)) {
-      const text = `${data.name} ${data.items.map((i) => i.title).join(" ")}`.toLowerCase();
-      if (!text.includes(searchQuery)) return false;
     }
     return true;
   });
