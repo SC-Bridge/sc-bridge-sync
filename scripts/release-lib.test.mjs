@@ -26,13 +26,14 @@ describe("commitsBetween", () => {
 });
 
 describe("buildReleaseNotes", () => {
-  it("lists each commit and the five download assets", () => {
+  it("lists each commit and the four download assets", () => {
     const notes = buildReleaseNotes("1.2.3", ["abc1234 feat: one", "def5678 fix: two"]);
     expect(notes).toContain("## SC Bridge Sync v1.2.3");
     expect(notes).toContain("- abc1234 feat: one\n- def5678 fix: two");
-    for (const browser of ["chrome", "firefox", "edge", "opera", "sources"]) {
+    for (const browser of ["chrome", "firefox", "edge", "sources"]) {
       expect(notes).toContain(`sc-bridge-sync-${browser}.zip`);
     }
+    expect(notes.toLowerCase()).not.toContain("opera");
   });
 
   it("says so when there are no commits instead of printing an empty bullet", () => {
