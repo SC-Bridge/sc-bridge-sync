@@ -7,7 +7,7 @@
  *   node scripts/release.mjs patch|minor|major
  *     1. Preflight: clean tree, on main, main == origin/main
  *     2. Branch release/vX.Y.Z, bump package.json
- *     3. Build + zip all 4 browsers + sources, verify names + manifest version
+ *     3. Build + zip all 3 browsers + sources, verify names + manifest version
  *     4. Commit the bump, push the branch, open a PR (body = release notes)
  *     5. Merge the PR with a merge commit (keeps the hook-built bump commit)
  *     6. publish (below)
@@ -42,7 +42,6 @@ const EXPECTED = [
   "sc-bridge-sync-chrome.zip",
   "sc-bridge-sync-firefox.zip",
   "sc-bridge-sync-edge.zip",
-  "sc-bridge-sync-opera.zip",
   "sc-bridge-sync-sources.zip",
 ];
 
@@ -73,7 +72,7 @@ function preflight() {
   console.log(`  ✓ clean tree, on main at ${local.slice(0, 7)}, in sync with origin`);
 }
 
-// --- Build + verify the five zips for the version in package.json ---
+// --- Build + verify the four zips for the version in package.json ---
 function buildZips(version) {
   console.log(`\n▸ Cleaning .output/`);
   if (existsSync(OUTPUT_DIR)) {
@@ -96,7 +95,7 @@ function buildZips(version) {
   if (manifest.version !== version) {
     fail(`Manifest version (${manifest.version}) doesn't match package.json (${version})`);
   }
-  console.log(`  ✓ All 5 zips present, manifest version: ${manifest.version}`);
+  console.log(`  ✓ All 4 zips present, manifest version: ${manifest.version}`);
 }
 
 // --- Release notes: commits since the previous tag, written to a file for gh ---

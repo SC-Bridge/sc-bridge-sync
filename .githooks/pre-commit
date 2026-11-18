@@ -4,7 +4,7 @@
 # On every commit:
 # 1. Typecheck
 # 2. Unit tests (vitest)
-# 3. Build all 4 browser zips + sources zip
+# 3. Build all 3 browser zips + sources zip
 # 4. Validate naming convention (sc-bridge-sync-{browser}.zip)
 #
 # The zips in .output/ are gitignored but always kept up-to-date
@@ -22,7 +22,7 @@ echo "▸ Building zips for all browsers..."
 npm run zip:all
 
 # Validate that expected zips exist with correct names
-EXPECTED="sc-bridge-sync-chrome.zip sc-bridge-sync-firefox.zip sc-bridge-sync-edge.zip sc-bridge-sync-opera.zip sc-bridge-sync-sources.zip"
+EXPECTED="sc-bridge-sync-chrome.zip sc-bridge-sync-firefox.zip sc-bridge-sync-edge.zip sc-bridge-sync-sources.zip"
 MISSING=""
 for zip in $EXPECTED; do
   if [ ! -f ".output/$zip" ]; then
@@ -39,5 +39,5 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-echo "▸ All 5 zips verified in .output/"
+echo "▸ All 4 zips verified in .output/"
 echo "  $(ls -1 .output/*.zip | xargs -I{} basename {})"

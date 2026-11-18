@@ -59,18 +59,6 @@ Recommended path — one-click install, auto-updates.
 5. Click **Load unpacked** and select the unzipped folder
 </details>
 
-### Opera
-
-Opera doesn't have an SC Bridge Sync store listing — manual sideload is the official path.
-
-[![Download ZIP for Opera](https://img.shields.io/badge/Download%20ZIP-Opera-FF1B2D?style=for-the-badge&logo=opera&logoColor=white)](https://github.com/SC-Bridge/sc-bridge-sync/releases/latest/download/sc-bridge-sync-opera.zip)
-
-1. Download the ZIP using the button above
-2. Unzip the file
-3. Open Opera and navigate to `opera://extensions`
-4. Enable **Developer mode** (top right)
-5. Click **Load unpacked** and select the unzipped folder
-
 ## Usage
 
 1. Log in to [robertsspaceindustries.com](https://robertsspaceindustries.com)

@@ -14,7 +14,6 @@ const ZIP_ASSETS = [
   ["Chrome", "sc-bridge-sync-chrome.zip", "load unpacked at `chrome://extensions`"],
   ["Edge", "sc-bridge-sync-edge.zip", "load unpacked at `edge://extensions`"],
   ["Firefox", "sc-bridge-sync-firefox.zip", "load temporary at `about:debugging#/runtime/this-firefox`"],
-  ["Opera", "sc-bridge-sync-opera.zip", "load unpacked at `opera://extensions`"],
   ["Sources", "sc-bridge-sync-sources.zip", "full source for store review submissions"],
 ];
 
