@@ -13,6 +13,7 @@ import "./style.css";
 import type { RsiPledge, RsiPledgeItem, RsiUpgradeData, NamedShip, RsiAccountInfo, RsiUpgrade, RsiBuyBackPledge, RsiOrgInfo, RsiBadgeDisplay, SyncPayload } from "@/lib/types";
 import { SYNC_CATEGORIES, RSI_API, RSI_REQUEST_DELAY_MS, getApiBase, type PrivacyMode } from "@/lib/constants";
 import { downloadFile, pledgeShipNames, shipItems, toFlatCsv } from "@/lib/export";
+import { isPaintItem, parseStoredFilters } from "@/lib/hangar-filters";
 import { createPledgeSearch } from "@/lib/hangar-search";
 import { getPrivacyMode, getStealthPercent } from "@/lib/storage";
 
@@ -27,6 +28,7 @@ type FilterKey =
   | "flair"
   | "weapons"
   | "armour"
+  | "paints"
   | "lti"
   | "warbond"
   | "giftable"
@@ -61,6 +63,7 @@ const FILTERS: { key: FilterKey; label: string; group: "content" | "status" }[] 
   { key: "flair", label: "Flair", group: "content" },
   { key: "weapons", label: "Weapons", group: "content" },
   { key: "armour", label: "Armour", group: "content" },
+  { key: "paints", label: "Paints", group: "content" },
   { key: "lti", label: "LTI", group: "status" },
   { key: "warbond", label: "Warbond", group: "status" },
   { key: "giftable", label: "Giftable", group: "status" },
@@ -83,6 +86,7 @@ const FETCH_TIMEOUT_MS = 15_000;
 const BUYBACK_PROBE_BATCH = 5;
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 0] as const; // 0 = All
+const FILTERS_STORAGE_KEY = "scb_filters";
 
 /** Strip RSI pledge prefixes to show the actual content name */
 function cleanPledgeName(name: string): string {
@@ -333,11 +337,15 @@ function tryInit(): boolean {
 
 async function loadStoredPreferences() {
   try {
-    const result = await browser.storage.local.get(["scb_sort_key", "scb_page_size"]);
+    const result = await browser.storage.local.get(["scb_sort_key", "scb_page_size", FILTERS_STORAGE_KEY]);
     const storedSort = SORT_OPTIONS.find((o) => o.key === result.scb_sort_key);
     if (storedSort) sortKey = storedSort.key;
     const storedPageSize = PAGE_SIZE_OPTIONS.find((s) => s === result.scb_page_size);
     if (storedPageSize != null) pageSize = storedPageSize;
+    const storedFilters = parseStoredFilters(result[FILTERS_STORAGE_KEY], FILTERS.map((f) => f.key));
+    includeFilters = new Set(storedFilters.include);
+    excludeFilters = new Set(storedFilters.exclude);
+    searchQuery = storedFilters.search;
   } catch {
     // ignore
   }
@@ -354,7 +362,20 @@ function syncPreferenceControls() {
   if (sortSelect) sortSelect.value = sortKey;
   const pageSizeSelect = document.querySelector<HTMLSelectElement>("#scb-page-size");
   if (pageSizeSelect) pageSizeSelect.value = String(pageSize);
+  const searchInput = document.querySelector<HTMLInputElement>(".scb-search");
+  if (searchInput) searchInput.value = searchQuery;
+  const toolbar = document.getElementById("scb-toolbar");
+  if (toolbar) updateFilterButtonStates(toolbar);
   if (!loading) applyFilters();
+}
+
+/** Remember the filter buttons and search text so a page refresh keeps them. */
+function storeFilters() {
+  storePreference(FILTERS_STORAGE_KEY, {
+    include: [...includeFilters],
+    exclude: [...excludeFilters],
+    search: searchQuery,
+  });
 }
 
 async function storePreference(key: string, value: unknown) {
@@ -1212,6 +1233,7 @@ function injectToolbar() {
     includeFilters.clear();
     excludeFilters.clear();
     updateFilterButtonStates(toolbar);
+    storeFilters();
     applyFilters();
   });
 
@@ -1239,6 +1261,7 @@ function injectToolbar() {
       }
 
       updateFilterButtonStates(toolbar);
+      storeFilters();
       applyFilters();
     });
   });
@@ -1250,6 +1273,7 @@ function injectToolbar() {
     // Debounce the filter application
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
+      storeFilters();
       applyFilters();
     }, SEARCH_DEBOUNCE_MS);
   });
@@ -1333,6 +1357,7 @@ function matchesFilter(pledge: RsiPledge, filter: FilterKey): boolean {
     case "armour": return pledge.items.some((i) =>
       (i.kind === "FPS Equipment" || i.kind === null) &&
       /armou?r|helmet|undersuit|chest|legs|arms|core/i.test(i.title));
+    case "paints": return pledge.items.some(isPaintItem);
     case "lti": return pledge.hasLti;
     case "warbond": return pledge.isWarbond;
     case "giftable": return pledge.isGiftable;
